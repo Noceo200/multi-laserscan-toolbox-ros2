@@ -1,0 +1,13 @@
+laserscan_toolbox_node:
+  ros__parameters:
+    lidar1_start_angle : 0.785398163 #45 deg
+    lidar1_end_angle : 5.497787144 #-45 = 315 deg
+    lidar1_angle_origin_offset : 3.141592654 #180 deg with rpLidars
+    lidar2_start_angle : 0.785398163 #45 deg
+    lidar2_end_angle : 5.497787144 #-45 = 315 deg
+    lidar2_angle_origin_offset : 3.141592654 #180 deg with rpLidars
+    topic_lid1 : "lidar1/scan"
+    topic_lid2 : "lidar2/scan"
+    topic_out : "scan"
+    new_frame : "base_link"
+    rate : 20.0 #hz
