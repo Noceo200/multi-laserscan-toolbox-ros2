@@ -174,8 +174,8 @@ public:
                      << "\nfused_scan published" << " (node time: " << (this->now()).nanoseconds() << "ns)" 
                      << "\n  Frame: " <<  fused_scan.header.frame_id
                      << "\n  Timestamp: " <<  std::to_string(TimeToDouble(fused_scan.header.stamp))
-                     << "\n  Resolution: " << total_vals
-                     << "\n  Detected points: " << non_zero_vals
+                     << "\n  Number of rays: " << total_vals
+                     << "\n  Number of hit: " << non_zero_vals
                      << std::endl;
 
             if(debug && show_ranges){
@@ -561,7 +561,7 @@ int angle_to_index(double alpha, int resolution){
         alpha += 2 * M_PI;
     }
     // Calculate the index
-    return static_cast<int>(round((alpha * resolution) / (2 * M_PI)));
+    return static_cast<int>(round((alpha * resolution) / (2*M_PI)));
 }
 
 double index_to_angle(int ind, int resolution){

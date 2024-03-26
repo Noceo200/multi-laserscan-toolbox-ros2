@@ -30,6 +30,10 @@ laserscan_toolbox_node:
       start_angle: 0.0 #Crop the datas 
       end_angle: 6.283185307 #Crop the datas
       scan_angle_offset: 0.0 #If there is an offset between your frame angle origin (x axis) and your sensor.
+      range_min: 0.0 #m, #Crop the datas 
+      range_max: 100.0 #m, #Crop the datas 
+      persistence: false
+      timeout: 0.0 #0.0 seconds = all value's date are autorized
 
     s2:
       topic: "scan2"
