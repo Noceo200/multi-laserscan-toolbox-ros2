@@ -459,7 +459,7 @@ geometry_msgs::msg::Vector3 quaternion_to_euler(geometry_msgs::msg::Quaternion q
 }
 
 geometry_msgs::msg::Vector3 adapt_angle(geometry_msgs::msg::Vector3 vect){
-    //avoid flip with euleur angles
+    //avoid flip with euleur angles at gimbla lock, work only for z component in that case.
     geometry_msgs::msg::Vector3 new_vect;
     if(abs(abs(vect.x)-M_PI)<0.01 && abs(abs(vect.y)-M_PI)<0.01){
         new_vect.x = 0.0;
