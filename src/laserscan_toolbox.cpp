@@ -10,19 +10,12 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/buffer.h"
+#include "tools.h"
 
-std::string vector3ToString(geometry_msgs::msg::Vector3& vector);
-geometry_msgs::msg::Vector3 stringToVector3(std::string& str);
-geometry_msgs::msg::Vector3 quaternion_to_euler(geometry_msgs::msg::Quaternion quat);
-geometry_msgs::msg::Vector3 adapt_angle(geometry_msgs::msg::Vector3 vect);
-double TimeToDouble(builtin_interfaces::msg::Time& stamp);
 sensor_msgs::msg::LaserScan::SharedPtr convert_raw_data(sensor_msgs::msg::LaserScan::SharedPtr laser_raw,std::string new_frame,double start_angle, double end_angle, double angle_origin_offset, geometry_msgs::msg::Vector3 vector_newframe, geometry_msgs::msg::Vector3 rotate_newframe, std::stringstream &debug_ss);
 sensor_msgs::msg::LaserScan filter_data(sensor_msgs::msg::LaserScan::SharedPtr msg,double start_angle, double end_angle, double angle_origin_offset);
-int angle_to_index(double alpha, int resolution);
-double index_to_angle(int ind, int resolution);
 void get_pos(double &x, double &y,double alpha,double val,double x_off,double y_off);
 sensor_msgs::msg::LaserScan transform_data(sensor_msgs::msg::LaserScan::SharedPtr msg, double off_vect_x,double off_vect_y, double off_tetha, std::stringstream &debug_ss);
-
 
 class LaserScanToolboxNode : public rclcpp::Node {
 public:
@@ -90,7 +83,7 @@ public:
                 //get translation vector new_frame=>sensor
                 geometry_msgs::msg::TransformStamped transf =tf_buffer_->lookupTransform(new_frame, sources_var[source_name]["frame"], tf2::TimePointZero);
                 geometry_msgs::msg::Vector3 vector_newframe_sensor = transf.transform.translation;  //translation vector from new_frame to frame_sensor
-                geometry_msgs::msg::Vector3 rotate_newframe_sensor = quaternion_to_euler(transf.transform.rotation);
+                geometry_msgs::msg::Vector3 rotate_newframe_sensor = adapt_angle(quaternion_to_euler3D(transf.transform.rotation));
                 //sav datas
                 sources_var[source_name]["frame_trans_vector"] = vector3ToString(vector_newframe_sensor);
                 sources_var[source_name]["frame_rot_vector"] = vector3ToString(rotate_newframe_sensor);
@@ -416,68 +409,6 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-std::string vector3ToString(geometry_msgs::msg::Vector3& vector) {
-    std::string result = "(" +
-        std::to_string(vector.x) + ", " +
-        std::to_string(vector.y) + ", " +
-        std::to_string(vector.z) + ")";
-    return result;
-}
-
-geometry_msgs::msg::Vector3 stringToVector3(std::string& str) {
-    geometry_msgs::msg::Vector3 vector;
-    std::stringstream ss(str);
-    // Temporary variables to store parsed values
-    double x, y, z;
-    // Read values from stringstream
-    char delim;
-    ss >> delim >> x >> delim >> y >> delim >> z >> delim;
-    // Assign parsed values to the vector
-    vector.x = x;
-    vector.y = y;
-    vector.z = z;
-    return vector;
-}
-
-geometry_msgs::msg::Vector3 quaternion_to_euler(geometry_msgs::msg::Quaternion quat){
-    // Convert geometry_msgs::msg::Quaternion to Eigen::Quaterniond
-    Eigen::Quaterniond eigen_quaternion(
-        quat.w,
-        quat.x,
-        quat.y,
-        quat.z
-    );
-    // Convert quaternion to Euler angles
-    Eigen::Vector3d euler_angles = eigen_quaternion.toRotationMatrix().eulerAngles(0, 1, 2); 
-    geometry_msgs::msg::Vector3 rot_vect;
-    rot_vect.x = euler_angles(0);
-    rot_vect.y = euler_angles(1);
-    rot_vect.z = euler_angles(2);
-    //RCLCPP_INFO(this->get_logger(), "ROT Quat: x='%.2f', y='%.2f', z='%.2f', w='%.2f'", quat.x,quat.y,quat.z,quat.w);
-    //RCLCPP_INFO(this->get_logger(), "ROT Euler: x='%.2f', y='%.2f', z='%.2f'", rot_vect.x,rot_vect.y,rot_vect.z);
-    return adapt_angle(rot_vect);
-}
-
-geometry_msgs::msg::Vector3 adapt_angle(geometry_msgs::msg::Vector3 vect){
-    //avoid flip with euleur angles at gimbla lock, work only for z component in that case.
-    geometry_msgs::msg::Vector3 new_vect;
-    if(abs(abs(vect.x)-M_PI)<0.01 && abs(abs(vect.y)-M_PI)<0.01){
-        new_vect.x = 0.0;
-        new_vect.y = 0.0;
-        new_vect.z = M_PI+vect.z; 
-    }
-    else{
-        new_vect.x = vect.x;
-        new_vect.y = vect.y;
-        new_vect.z = vect.z;
-    }
-    return new_vect;
-}
-
-double TimeToDouble(builtin_interfaces::msg::Time& stamp){
-    return static_cast<double>(stamp.sec) + static_cast<double>(stamp.nanosec) * 1e-9;
-}
-
 sensor_msgs::msg::LaserScan::SharedPtr convert_raw_data(sensor_msgs::msg::LaserScan::SharedPtr laser_raw,std::string new_frame,double start_angle, double end_angle, double angle_origin_offset, geometry_msgs::msg::Vector3 vector_newframe, geometry_msgs::msg::Vector3 rotate_newframe, std::stringstream &debug_ss){
     if (laser_raw != nullptr){
         //RCLCPP_INFO(this->get_logger(), "Lid1_run");
@@ -504,16 +435,6 @@ sensor_msgs::msg::LaserScan::SharedPtr convert_raw_data(sensor_msgs::msg::LaserS
     }
     else{
         return nullptr;
-    }
-}
-
-bool consider_val(int current_ind, int start_ind, int end_ind){
-    // return true if current_ind is between start_ind and end_ind according to a circle reference.
-    if(start_ind>end_ind){ //if interval pass throught the origin of the circle, we test considering the split into 2 interval
-        return (current_ind>=start_ind || current_ind<=end_ind);
-    }
-    else{ // if values are equal, or classical ,we test as classic interval
-        return (current_ind>=start_ind && current_ind<=end_ind);
     }
 }
 
@@ -551,21 +472,6 @@ sensor_msgs::msg::LaserScan filter_data(sensor_msgs::msg::LaserScan::SharedPtr m
     }
 
     return filtered_scan;
-}
-
-int angle_to_index(double alpha, int resolution){
-    //return index of angle alpha, in a table with 'resolution' values placed from 0 to 360 angles.
-    // Normalize the angle to the range [0, 2*M_PI)
-    alpha = std::fmod(alpha, 2 * M_PI);
-    if (alpha < 0) {
-        alpha += 2 * M_PI;
-    }
-    // Calculate the index
-    return static_cast<int>(round((alpha * resolution) / (2*M_PI)));
-}
-
-double index_to_angle(int ind, int resolution){
-    return (ind*(2*M_PI))/resolution;
 }
 
 void get_pos(double &x, double &y,double alpha,double val,double x_off,double y_off){

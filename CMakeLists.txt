@@ -9,19 +9,28 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(pcl_conversions REQUIRED) #not used by merger but needed by tools.cpp file
+find_package(PCL REQUIRED) #not used by merger but needed by tools.cpp file
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(rosgraph_msgs REQUIRED)
 
-add_executable(laserscan_toolbox_node src/laserscan_toolbox.cpp)
+file(GLOB SOURCES
+    src/*.h
+    src/*.cpp
+)
+
+add_executable(laserscan_toolbox_node ${SOURCES})
 ament_target_dependencies(laserscan_toolbox_node   
   rclcpp
-  sensor_msgs
+  sensor_msgs  
   tf2
   tf2_ros
   tf2_geometry_msgs
   rosgraph_msgs
+  pcl_conversions #not used by merger but needed by tools.cpp file
+  PCL #not used by merger but needed by tools.cpp file
 )
 
 target_link_libraries(laserscan_toolbox_node
