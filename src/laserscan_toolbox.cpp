@@ -154,16 +154,18 @@ public:
             }
 
             //put clock
-            //set_clock(transformed_scans["cam1"]); //TDM
+            set_clock(fused_scan); 
 
             // Publish the fused laser scan
-            //publisher_->publish(*fused_scan_360); //TDM
+            publisher_->publish(*fused_scan); 
 
+            /*
             for (const auto& pair1 : transformed_scans) {
                 std::string source_name = pair1.first;
                 set_clock(transformed_scans[source_name]);
                 publisher_->publish(*transformed_scans[source_name]);
             }
+            */
             
             //debug data
             int non_zero_vals = 0;
@@ -425,13 +427,16 @@ public:
         if (laser_raw != nullptr){
             //Configure scan into same format that the final one
             sensor_msgs::msg::LaserScan::SharedPtr transformed_scan = new_360_scan();
+            //transformed_scan->header.frame_id =  laser_raw->header.frame_id;
             //remap points to match the new resolutions and have a 360 circle
             int prev_reso = laser_raw->ranges.size();
             int new_reso = transformed_scan->ranges.size();
             for(int i =0; i<laser_raw->ranges.size(); i++){
                 int new_i = remap_scan_index(i, laser_raw->angle_min, laser_raw->angle_max, prev_reso, transformed_scan->angle_min, transformed_scan->angle_max, new_reso);
                 transformed_scan->ranges[new_i] = laser_raw->ranges[i];
+                transformed_scan->intensities[new_i] = laser_raw->intensities[i];
             }
+            //debug_ss << "\nDEBUG_PERSO: total_Hits final: " << count << std::endl;
             //filter data we want to keep
             filter_360_data(transformed_scan,start_angle, end_angle, angle_origin_offset, min_range, max_range, debug_ss); //cut, crop data according to wanted angle for this source + add offset
             //compute new points in the wanted ouput frame
