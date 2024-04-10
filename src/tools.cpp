@@ -15,7 +15,20 @@ LAST MODIF(DD/MM/YYYY): 09/04/2024
 #include "tf2_ros/buffer.h"
 #include "tools.h"
 
-
+int copy_ranges(sensor_msgs::msg::LaserScan::SharedPtr host_scan, sensor_msgs::msg::LaserScan::SharedPtr target_scan){
+    try
+    {
+        int reso = host_scan->ranges.size();
+        for (int i = 0; i < reso; ++i) { 
+            host_scan->ranges[i] = target_scan->ranges[i];
+        }
+        return 1;
+    }
+    catch(const std::exception& e)
+    {
+        return 0;
+    }
+}
 
 geometry_msgs::msg::Vector3 adapt_angle(geometry_msgs::msg::Vector3 vect){
     //avoid flip with euleur angles at gimbla lock, work only for z component in that case.
@@ -347,19 +360,21 @@ int remap_scan_index(int prev_ind, double prev_angle_start, double prev_angle_en
     /*
     return the index in a new scan list.
     */
-
-   //offset gestion
-    double angle_offset = sawtooth(new_angle_start-prev_angle_start);
-    int ind_offset = -std::copysign(1.0,angle_offset)*angle_to_index(std::abs(angle_offset),prev_reso);
-    new_ind = static_cast<int>(round(fmod(prev_ind + ind_offset,prev_reso)));
-    if(new_ind<0){
-        new_ind += prev_reso;
-    }
-    //different reso gestion 
     double prev_elong = prev_angle_end - prev_angle_start;  
     double new_elong = new_angle_end - new_angle_start;
     double prev_angle_incr = prev_elong/prev_reso;
     double new_angle_incr = new_elong/new_reso;
+    int reso_360 = static_cast<int>(round(2*M_PI/prev_angle_incr)); //resoluton that would have prev_list if on a 360deg circle list
+
+   //offset gestion
+    double angle_offset = sawtooth(prev_angle_start-new_angle_start);
+    if(angle_offset<0){
+        angle_offset += 2*M_PI;
+    }
+    //should have offset between [0,2Pi]
+    int ind_offset = angle_to_index(angle_offset,reso_360); //should return index between [0,reso_360]
+    new_ind = static_cast<int>(round(fmod(prev_ind + ind_offset,reso_360)));
+    //different reso gestion 
     new_ind = static_cast<int>(round((prev_angle_incr*new_ind)/new_angle_incr));
     
     return new_ind;
@@ -368,3 +383,4 @@ int remap_scan_index(int prev_ind, double prev_angle_start, double prev_angle_en
 double sawtooth(double x) {
     return std::fmod(x+M_PI,2*M_PI)-M_PI;
 }
+

@@ -14,6 +14,7 @@ LAST MODIF(DD/MM/YYYY): 09/04/2024
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/buffer.h"
 
+int copy_ranges(sensor_msgs::msg::LaserScan::SharedPtr host_scan, sensor_msgs::msg::LaserScan::SharedPtr target_scan);
 geometry_msgs::msg::TransformStamped tf_offset(geometry_msgs::msg::TransformStamped &relative_transform, geometry_msgs::msg::TransformStamped tf1, geometry_msgs::msg::TransformStamped tf2);
 void shift_cloud_from_tf(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, geometry_msgs::msg::TransformStamped transf);
 void MatProd_fast4_4(double (&M)[4][4],double (&A)[4][4],double (&B)[4][4]);
