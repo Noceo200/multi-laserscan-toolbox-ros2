@@ -13,11 +13,6 @@
 #include "tools.h"
 #include <stdexcept> // Include the standard exception header
 
-sensor_msgs::msg::LaserScan::SharedPtr convert_raw_data_to_360_scan(sensor_msgs::msg::LaserScan::SharedPtr laser_raw,std::string new_frame,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, geometry_msgs::msg::Vector3 vector_newframe, geometry_msgs::msg::Vector3 rotate_newframe, std::stringstream &debug_ss);
-int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, std::stringstream &debug_ss);
-void get_pos(double &x, double &y,double alpha,double val,double x_off,double y_off);
-int transform_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan, double off_vect_x,double off_vect_y, double off_tetha, std::stringstream &debug_ss);
-
 class LaserScanToolboxNode : public rclcpp::Node {
 public:
     LaserScanToolboxNode() : Node("laserscan_toolbox_node") {
@@ -76,7 +71,6 @@ public:
         std::stringstream debug_ss;
         bool ready = false;
         debug_ss << "\n\n" << source_name << ": Scan received" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-        sources_var[source_name]["last_timestamp"] = std::to_string(TimeToDouble(msg->header.stamp));
         //we get frame and transformation of the sensor before to use the data
         if (sources_var[source_name]["frame"] == "" || sources_var[source_name]["frame_trans_vector"] == ""){
             sources_var[source_name]["frame"] = msg->header.frame_id;
@@ -101,10 +95,13 @@ public:
             ready = true;
         }
 
+        //save scan
         if(ready){
+            raw_scan_mutexes[source_name].lock();
             raw_scans[source_name] = msg;
             debug_ss << source_name << ": Raw scan updated" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-            debug_ss << "  Raw scan timestamp: " << sources_var[source_name]["last_timestamp"] << " s)" << std::endl;
+            debug_ss << "  Raw scan timestamp: " << TimeToDouble(raw_scans[source_name]->header.stamp) << " s)" << std::endl;
+            raw_scan_mutexes[source_name].unlock();
         }
 
         //debug
@@ -127,19 +124,34 @@ public:
             //Scan transformations and processing according to configurations
             for (const auto& pair1 : raw_scans) {
                 std::string source_name = pair1.first;
-                transformed_scans[source_name] = convert_raw_data_to_360_scan(raw_scans[source_name],new_frame,std::stod(sources_config[source_name]["start_angle"]), std::stod(sources_config[source_name]["end_angle"]),std::stod(sources_config[source_name]["scan_angle_offset"]), std::stod(sources_config[source_name]["range_min"]), std::stod(sources_config[source_name]["range_max"]), stringToVector3(sources_var[source_name]["frame_trans_vector"]), stringToVector3(sources_var[source_name]["frame_rot_vector"]), debug_ss);
-                debug_ss << source_name << ": Scan transformed, ready for fusion..." << "(last data stamp: " << sources_var[source_name]["last_timestamp"] << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                raw_scan_mutexes[source_name].lock();
+                sensor_msgs::msg::LaserScan raw_scan = *raw_scans[source_name]; //copy the data
+                raw_scan_mutexes[source_name].unlock();
+                sensor_msgs::msg::LaserScan::SharedPtr raw_scan_ptr = std::make_shared<sensor_msgs::msg::LaserScan>(raw_scan);
+                transformed_scans[source_name] = convert_raw_data_to_360_scan(raw_scan_ptr,new_frame,std::stod(sources_config[source_name]["start_angle"]), std::stod(sources_config[source_name]["end_angle"]),std::stod(sources_config[source_name]["scan_angle_offset"]), std::stod(sources_config[source_name]["range_min"]), std::stod(sources_config[source_name]["range_max"]), stringToVector3(sources_var[source_name]["frame_trans_vector"]), stringToVector3(sources_var[source_name]["frame_rot_vector"]), debug_ss);
+                transformed_scans[source_name]->header.stamp = raw_scan_ptr->header.stamp;
+                debug_ss << source_name << ": Scan transformed, ready for fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
             }
-            debug_ss <<"    |\n    |\n    |\n    V" << "\nStarting FUSION" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
             
+            update_stamp();
+            debug_ss <<"    |\n    |\n    |\n    V" << "\nStarting FUSION (Global timestamp: " << TimeToDouble(current_global_stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
             //Fusion
             sensor_msgs::msg::LaserScan::SharedPtr fused_scan_360 = new_360_scan(); //the final fused scan can be a non 360 scan, but we first fuse the 360deg scans
             //the resolution should be same that every other transformed_scans from sources
             int resolution_360 = fused_scan_360->ranges.size();
+            int fused_scans_nb = 0;
             for (const auto& pair1 : transformed_scans) {
                 std::string source_name = pair1.first;
-                fuseScans(resolution_360, fused_scan_360, transformed_scans[source_name]);
-                debug_ss << "fused_scan <-- " << source_name << " (last data stamp: " << sources_var[source_name]["last_timestamp"] << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                double last_stamp = TimeToDouble(transformed_scans[source_name]->header.stamp); //we want last timestamp of current scan used
+                double dt_out = std::stod(sources_config[source_name]["timeout"]);
+                if(dt_out == 0.0 || last_stamp >= TimeToDouble(current_global_stamp)-dt_out){
+                    fuseScans(resolution_360, fused_scan_360, transformed_scans[source_name]);
+                    debug_ss << "fused_scan <-- " << source_name << " (data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                    fused_scans_nb ++;
+                }
+                else{
+                    debug_ss << "fused_scan xxx " << source_name << " exceed its timeout value of " << dt_out << "s" << " (data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                }
             }
 
             //we fill the final fused scan by keeping only the points that should be kept according to the angles selected, and the ranges
@@ -154,42 +166,50 @@ public:
             }
 
             //put clock
-            set_clock(fused_scan); 
+            update_stamp();
+            fused_scan->header.stamp = current_global_stamp; 
 
             // Publish the fused laser scan
-            publisher_->publish(*fused_scan); 
-
-            /*
-            for (const auto& pair1 : transformed_scans) {
-                std::string source_name = pair1.first;
-                set_clock(transformed_scans[source_name]);
-                publisher_->publish(*transformed_scans[source_name]);
-            }
-            */
+            if(fused_scans_nb>0){
+                publisher_->publish(*fused_scan); 
             
-            //debug data
-            int non_zero_vals = 0;
-            int total_vals = fused_scan->ranges.size();
-            if(debug){
-                for(int i=0; i < total_vals; i++){
-                    if(fused_scan->ranges[i] < INFINITY){
-                        non_zero_vals ++;
+
+                /*
+                for (const auto& pair1 : transformed_scans) {
+                    std::string source_name = pair1.first;
+                    transformed_scans[source_name]->header.stamp = current_global_stamp;
+                    publisher_->publish(*transformed_scans[source_name]);
+                }
+                */
+                
+                //debug data
+                int non_zero_vals = 0;
+                int total_vals = fused_scan->ranges.size();
+                if(debug){
+                    for(int i=0; i < total_vals; i++){
+                        if(fused_scan->ranges[i] < INFINITY){
+                            non_zero_vals ++;
+                        }
                     }
                 }
-            }
-            debug_ss << "    |\n    |\n    |\n    V"
-                    << "\nfused_scan published" << " (node time: " << (this->now()).nanoseconds() << "ns)" 
-                    << "\n  Frame: " <<  fused_scan->header.frame_id
-                    << "\n  Timestamp: " <<  std::to_string(TimeToDouble(fused_scan->header.stamp))
-                    << "\n  Number of rays: " << total_vals
-                    << "\n  Number of hit: " << non_zero_vals
-                    << std::endl;
+                debug_ss << "    |\n    |\n    |\n    V"
+                        << "\nfused_scan published" << " (node time: " << (this->now()).nanoseconds() << "ns)" 
+                        << "\n  Frame: " <<  fused_scan->header.frame_id
+                        << "\n  Timestamp: " <<  std::to_string(TimeToDouble(fused_scan->header.stamp))
+                        << "\n  Number of rays: " << total_vals
+                        << "\n  Number of hit: " << non_zero_vals
+                        << std::endl;
 
-            if(debug && show_ranges){
-                debug_ss << "Ranges: ";
-                for(int i=0; i < total_vals; i++){
-                    debug_ss << fused_scan->ranges[i] << " ";
+                if(debug && show_ranges){
+                    debug_ss << "Ranges: ";
+                    for(int i=0; i < total_vals; i++){
+                        debug_ss << fused_scan->ranges[i] << " ";
+                    }
                 }
+            }else{
+                debug_ss << "    |\n    |\n    |\n    V"
+                         << "\nNo scan published."
+                         << std::endl;
             }
 
             //debug
@@ -208,15 +228,6 @@ public:
             }
         }
         */
-    }
-
-    void set_clock(sensor_msgs::msg::LaserScan::SharedPtr scan){
-        if(use_sim_time){ //if use_sim_time = true
-            scan->header.stamp = simu_timestamp;
-        }
-        else{
-            scan->header.stamp = clock->now();
-        }
     }
 
     void fuseScans(int resolution, sensor_msgs::msg::LaserScan::SharedPtr scan1,sensor_msgs::msg::LaserScan::SharedPtr scan2) {
@@ -311,7 +322,7 @@ public:
             sources_var[source_name]["frame"] = "";
             sources_var[source_name]["frame_trans_vector"] = "";
             sources_var[source_name]["frame_rot_vector"] = "";
-            sources_var[source_name]["last_timestamp"] = "";
+            raw_scan_mutexes[source_name]; //enought to init mutex
         }
     }
 
@@ -345,6 +356,8 @@ public:
             this->declare_parameter(source_name+".scan_angle_offset",0.0);
             this->declare_parameter(source_name+".range_min",0.0);
             this->declare_parameter(source_name+".range_max",0.0);
+            this->declare_parameter(source_name+".persistence",true);
+            this->declare_parameter(source_name+".timeout",0.0);
         }
     }
 
@@ -377,6 +390,8 @@ public:
             sources_config[source_name]["scan_angle_offset"] = this->get_parameter(source_name+".scan_angle_offset").value_to_string();
             sources_config[source_name]["range_min"] = this->get_parameter(source_name+".range_min").value_to_string();
             sources_config[source_name]["range_max"] = this->get_parameter(source_name+".range_max").value_to_string();
+            sources_config[source_name]["persistence"] = this->get_parameter(source_name+".persistence").value_to_string();
+            sources_config[source_name]["timeout"] = this->get_parameter(source_name+".timeout").value_to_string();
         }
     }
 
@@ -448,6 +463,15 @@ public:
         }
     }
 
+    void update_stamp(){
+        if(use_sim_time){ //if use_sim_time = true
+            current_global_stamp = simu_timestamp;
+        }
+        else{
+            current_global_stamp = clock->now();
+        }
+    }
+
 private:
     /*
     Fixed variables
@@ -499,10 +523,11 @@ private:
     //clock
     builtin_interfaces::msg::Time simu_timestamp; //used for simuation
     rclcpp::Clock::SharedPtr clock; //used if not a simulation
+    builtin_interfaces::msg::Time current_global_stamp; //store current time
 
     //concurrence
     std::mutex mutex_debug_file;
-
+    std::map<std::string, std::mutex> raw_scan_mutexes;
 
 };
 
@@ -514,160 +539,6 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, std::stringstream &debug_ss){
-    /*
-    Receive a to_transform_scan of a 360 scan only, the shift will not work if the scan message is not a 360 one.
-    */    
-
-    int resolution = to_transform_scan->ranges.size();
-    //we shift all the values to bring back the origin angle to the x axis
-    int index_shift = angle_to_index(angle_origin_offset,resolution); //index which is the first angle for the lidar
-    sensor_msgs::msg::LaserScan::SharedPtr shifted_scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-    shifted_scan->ranges.clear();
-    for (int i = 0; i < resolution; ++i) { 
-        if(i+index_shift < resolution){ 
-            shifted_scan->ranges.push_back(to_transform_scan->ranges[i+index_shift]);
-        }
-        else{
-            shifted_scan->ranges.push_back(to_transform_scan->ranges[i+index_shift-resolution]);
-        }
-    }
-
-    //we keep the wanted angles
-    sensor_msgs::msg::LaserScan::SharedPtr filtered_scan = std::make_shared<sensor_msgs::msg::LaserScan>();;
-    filtered_scan->ranges.clear();
-
-    //compute index to consider according to min/max angles wanted
-    int start_index = angle_to_index(start_angle, resolution);
-    int end_index = angle_to_index(end_angle, resolution);
-
-    // LaserScan message filling
-    for (int i = 0; i < resolution; ++i) { 
-        float dist = shifted_scan->ranges[i];
-        if(consider_val(i, start_index, end_index) && dist<=max_range && dist>=min_range){ //if the value is autorized, we add it
-            filtered_scan->ranges.push_back(shifted_scan->ranges[i]);
-        }
-        else{
-            filtered_scan->ranges.push_back(INFINITY);
-        }
-    }
-
-    //copy result ranges into to_transform_scan
-    if(copy_ranges(to_transform_scan,filtered_scan)){ 
-        return 1;
-    } 
-    else{
-        debug_ss << "ERROR: filter_360_data: " << "Copy ranges failed" << '\n';
-        return 0;
-    }
-}
-
-void get_pos(double &x, double &y,double alpha,double val,double x_off,double y_off){
-    x = val*cos(alpha)+x_off;
-    y = val*sin(alpha)+y_off;
-}
-
-int transform_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan, double off_vect_x,double off_vect_y, double off_tetha, std::stringstream &debug_ss){
-    /*
-    to_transform_scan: current message to transform
-    off_vect_x: vector new_origin=>lidar
-    off_vect_y: vector new_origin=>lidar
-    return transformed_scan: message in which datas will be stored
-    Homogoneous transformations: https://www.fil.univ-lille.fr/portail/archive21-22/~aubert/m3d/m3d_transformation.pdf
-    */
-    //RCLCPP_INFO(this->get_logger(), "Transform_data: params : offx='%f'; offy='%f'; off_tetha='%f'",off_vect_x,off_vect_y,off_tetha);
-    //RCLCPP_INFO(this->get_logger(), "transform 1");
-    sensor_msgs::msg::LaserScan::SharedPtr transformed_scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-    transformed_scan->ranges.clear();
-    int resolution = to_transform_scan->ranges.size();
-
-    // Transform the LaserScan message
-    for (int i = 0; i < resolution; ++i) { //initiate
-        transformed_scan->ranges.push_back(INFINITY);
-    }
-
-    //let's be sure to manipulate angles from 0 to 2pi
-    if (off_tetha<0){
-        off_tetha=2*M_PI+off_tetha;
-    }
-    if (off_tetha == 2*M_PI){
-        off_tetha=0;
-    }
-    //translation in homogeneous coordinates
-    Eigen::MatrixXd T = Eigen::MatrixXd::Identity(4, 4);
-    T(0,3) = off_vect_x;
-    T(1,3) = off_vect_y;
-    //rotation in homogeneous coordinates
-    Eigen::MatrixXd R = Eigen::MatrixXd::Identity(4, 4);
-    R(0,0) = cos(off_tetha);
-    R(0,1) = -sin(off_tetha);
-    R(1,0) = sin(off_tetha);
-    R(1,1) = cos(off_tetha);
-    //final homogeneous transformation, M1_2 = pass matrix, displacement from new_frame to sensor_frame
-    Eigen::MatrixXd M1_2(4, 4);
-    M1_2 = T*R;
-
-    //debug_ss << "DEBUG: Pass Matrix:" << std::endl;
-    //debug_ss << M1_2 << std::endl;
-
-    //loop variables
-    double init_x = 0;
-    double init_y = 0;
-    double init_val = 0;
-    double init_angle = 0;
-    double new_x = 0;
-    double new_y = 0;
-    double new_val = 0;
-    double new_angle = 0;
-    int new_index = 0;
-
-    for (int ind = 0; ind < resolution; ++ind) { //transform
-        init_angle = index_to_angle(ind,resolution);
-        init_val = to_transform_scan->ranges[ind];
-
-        //points transformation
-        if (!isinf(init_val)){ //if it is infinity, we don't need to compute as the default values in the new scan will be INFINITY
-            get_pos(init_x, init_y,init_angle,init_val,0.0,0.0); //position in inital frame, vector: lidar=>point
-            Eigen::MatrixXd X2(4, 1); //pos in sensor frame
-            X2(0,0) = init_x;
-            X2(1,0) = init_y;
-            X2(2,0) = 0.0;
-            X2(3,0) = 1.0;
-            Eigen::MatrixXd X1(4, 1); //pos in newframe
-            X1 = M1_2*X2;
-            //Unpack
-            double new_x2 = X1(0,0);
-            double new_y2 = X1(1,0);
-            new_angle = atan2(new_y2,new_x2);
-            //we want angles from 0 to 2pi
-            if (new_angle<0){
-                new_angle=2*M_PI+new_angle;
-            }
-            if (new_angle == 2*M_PI){
-                new_angle=0;
-            }
-            //RCLCPP_INFO(this->get_logger(), "Transform_data: newangle='%f'",new_angle);
-
-            //new norm
-            new_val = sqrt(pow(new_x2,2)+pow(new_y2,2));
-
-            new_index = angle_to_index(new_angle,resolution);
-            transformed_scan->ranges[new_index] = std::min(static_cast<double>(transformed_scan->ranges[new_index]),new_val); //in case some area are no more accessible from the new origin
-            //RCLCPP_INFO(this->get_logger(), "Transform_data: initindex='%d'; initangle='%f'; initval='%f'; initx='%f'; inity='%f'; newx2='%f'; newy2='%f'; newval='%f'; newangle='%f'; newindex='%f'",ind,init_angle,init_val,init_x,init_y,new_x2,new_y2,new_val,new_angle,new_index);
-        }
-
-    }
-    //RCLCPP_INFO(this->get_logger(), "transform 3");
-
-    //copy result ranges into to_transform_scan
-    if(copy_ranges(to_transform_scan,transformed_scan)){ 
-        return 1;
-    } 
-    else{
-        debug_ss << "ERROR: filter_360_data: " << "Copy ranges failed" << '\n';
-        return 0;
-    }
-}
 
 ////TRASH
 
