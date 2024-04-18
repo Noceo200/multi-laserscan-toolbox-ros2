@@ -15,6 +15,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(rosgraph_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 
 file(GLOB SOURCES
     src/*.h
@@ -31,6 +32,7 @@ ament_target_dependencies(laserscan_toolbox_node
   rosgraph_msgs
   pcl_conversions #not used by merger but needed by tools.cpp file
   PCL #not used by merger but needed by tools.cpp file
+  nav_msgs
 )
 
 target_link_libraries(laserscan_toolbox_node

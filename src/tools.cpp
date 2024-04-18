@@ -1,5 +1,5 @@
 /*
-LAST MODIF(DD/MM/YYYY): 16/04/2024
+LAST MODIF(DD/MM/YYYY): 17/04/2024
 */
 
 #include "rclcpp/rclcpp.hpp"
@@ -14,6 +14,19 @@ LAST MODIF(DD/MM/YYYY): 16/04/2024
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/buffer.h"
 #include "tools.h"
+
+bool stringToBool(std::string &str) {
+    // Convert string to lowercase for case-insensitive comparison
+    std::string lowerStr = str;
+    std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(), ::tolower);
+
+    // Check for various representations of true and false
+    if (lowerStr == "true" || lowerStr == "yes" || lowerStr == "1") {
+        return true;
+    } else{
+        return false;
+    }
+}
 
 int transform_opened_scan(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan, double off_vect_x,double off_vect_y, double off_tetha, std::stringstream &debug_ss){
     /*
@@ -146,9 +159,11 @@ int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,dou
     for (int i = 0; i < resolution; ++i) { 
         if(i+index_shift < resolution){ 
             shifted_scan->ranges.push_back(to_transform_scan->ranges[i+index_shift]);
+            shifted_scan->intensities.push_back(to_transform_scan->intensities[i+index_shift]);
         }
         else{
             shifted_scan->ranges.push_back(to_transform_scan->ranges[i+index_shift-resolution]);
+            shifted_scan->intensities.push_back(to_transform_scan->intensities[i+index_shift-resolution]);
         }
     }
 
@@ -165,9 +180,11 @@ int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,dou
         float dist = shifted_scan->ranges[i];
         if(consider_val(i, start_index, end_index) && dist<=max_range && dist>=min_range){ //if the value is autorized, we add it
             filtered_scan->ranges.push_back(shifted_scan->ranges[i]);
+            filtered_scan->intensities.push_back(shifted_scan->intensities[i]);
         }
         else{
             filtered_scan->ranges.push_back(INFINITY);
+            filtered_scan->intensities.push_back(0.0);
         }
     }
 
@@ -203,6 +220,7 @@ int transform_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,
     // Transform the LaserScan message
     for (int i = 0; i < resolution; ++i) { //initiate
         transformed_scan->ranges.push_back(INFINITY);
+        transformed_scan->intensities.push_back(0.0);
     }
 
     //let's be sure to manipulate angles from 0 to 2pi
@@ -271,7 +289,11 @@ int transform_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,
             new_val = sqrt(pow(new_x2,2)+pow(new_y2,2));
 
             new_index = angle_to_index(new_angle,resolution);
-            transformed_scan->ranges[new_index] = std::min(static_cast<double>(transformed_scan->ranges[new_index]),new_val); //in case some area are no more accessible from the new origin
+            if(new_val < transformed_scan->ranges[new_index]){
+                transformed_scan->ranges[new_index] = new_val;
+                transformed_scan->intensities[new_index] = to_transform_scan->intensities[ind];
+            }
+            //(FORMER CODE)transformed_scan->ranges[new_index] = std::min(static_cast<double>(transformed_scan->ranges[new_index]),new_val); //depending on resolution several points can try to be at same index, and in case some area are no more accessible from the new origin
             //RCLCPP_INFO(this->get_logger(), "Transform_data: initindex='%d'; initangle='%f'; initval='%f'; initx='%f'; inity='%f'; newx2='%f'; newy2='%f'; newval='%f'; newangle='%f'; newindex='%f'",ind,init_angle,init_val,init_x,init_y,new_x2,new_y2,new_val,new_angle,new_index);
         }
 
@@ -294,6 +316,7 @@ int copy_ranges(sensor_msgs::msg::LaserScan::SharedPtr host_scan, sensor_msgs::m
         int reso = host_scan->ranges.size();
         for (int i = 0; i < reso; ++i) { 
             host_scan->ranges[i] = target_scan->ranges[i];
+            host_scan->intensities[i] = target_scan->intensities[i];
         }
         return 1;
     }

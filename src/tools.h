@@ -1,5 +1,5 @@
 /*
-LAST MODIF(DD/MM/YYYY): 16/04/2024
+LAST MODIF(DD/MM/YYYY): 17/04/2024
 */
 
 #include "rclcpp/rclcpp.hpp"
@@ -14,6 +14,7 @@ LAST MODIF(DD/MM/YYYY): 16/04/2024
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/buffer.h"
 
+bool stringToBool(std::string &str);
 int transform_opened_scan(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan, double off_vect_x,double off_vect_y, double off_tetha, std::stringstream &debug_ss);
 double rads_to_degrees(double rads);
 double degrees_to_rads(double degrees);
