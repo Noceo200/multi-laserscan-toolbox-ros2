@@ -162,19 +162,21 @@ public:
                     }
                     else{
                         //we transform the former scan values according to how the bot moved between the 2 measures
-                        mutex_odom.lock();
-                        nav_msgs::msg::Odometry::SharedPtr current_odom(new nav_msgs::msg::Odometry(*odom_msg_new)); //copy data
-                        mutex_odom.unlock();
                         double x_off = 0.0;
                         double y_off = 0.0;
                         double tetha_off = 0.0;
+                        double off_set_debug; //TDM, offset to apply so that we are in the map frame when debuging an area
                         if(odom_msg_new != nullptr){
+                            mutex_odom.lock();
+                            nav_msgs::msg::Odometry::SharedPtr current_odom(new nav_msgs::msg::Odometry(*odom_msg_new)); //copy data
+                            mutex_odom.unlock();
                             if(odom_msg_former != nullptr){ //if we have former odometry, we compute the offset
                                 geometry_msgs::msg::Vector3 euler_heading_former = adapt_angle(quaternion_to_euler3D(odom_msg_former->pose.pose.orientation)); //previous heading
                                 geometry_msgs::msg::Vector3 euler_heading_new = adapt_angle(quaternion_to_euler3D(current_odom->pose.pose.orientation)); //new heading
                                 x_off = current_odom->pose.pose.position.x - odom_msg_former->pose.pose.position.x;
                                 y_off = current_odom->pose.pose.position.y - odom_msg_former->pose.pose.position.y;
                                 tetha_off = sawtooth(euler_heading_new.z - euler_heading_former.z);
+                                off_set_debug = euler_heading_new.z;
                                 odom_msg_former = current_odom;
                             }
                             else{ //otherwise we just save odometry for next frame
@@ -187,13 +189,35 @@ public:
                         
                         if(x_off != 0.0 || y_off != 0.0 || tetha_off != 0.0 ){
                             transform_360_data(transformed_scans[source_name],-x_off,-y_off,-tetha_off,debug_ss);
+                            //filter_360_data(transformed_scans[source_name],0.0, 2*M_PI, 0.0, std::stod(sources_config[source_name]["range_min"]), std::stod(sources_config[source_name]["range_max"]), debug_ss);
                             debug_ss << source_name << ": Persistence ON, motion detected, Former Scan adjusted. (x,y,tetha) offset: (" << x_off << "," << y_off << "," << tetha_off << ") m, rad " << std::endl;
                         }
                         //we fuse the scan with the former values, the new scan will update the former values only on its FOV equivalence on a 360 deg scan.
                         double off_angle = stringToVector3(sources_var[source_name]["frame_rot_vector"]).z; //offset due to frame transformation, offset added by user already taken into consideration in specified angle interval for message
                         double angle_start = std::stod(sources_config[source_name]["start_angle"])+off_angle;
                         double angle_end = std::stod(sources_config[source_name]["end_angle"])+off_angle;
-                        fuseScans(resolution_360,transformed_scans[source_name], transformed_scan_local, true, angle_start, angle_end);
+                        fuseScans(resolution_360,transformed_scans[source_name], transformed_scan_local, true, angle_start, angle_end, source_name);
+                        //TDM START for debuging persistence areas
+                        double start_angle_debug = degrees_to_rads(170)-off_set_debug; //angles in map frame
+                        double end_angle_debug = degrees_to_rads(190)-off_set_debug;
+                        int start_ind_debug = angle_to_index(start_angle_debug,resolution_360); //indexes in scan, so in robot frame
+                        int end_ind_debug = angle_to_index(end_angle_debug,resolution_360);
+                        debug_ss << "Persitence area: (" << rads_to_degrees(start_angle_debug) << ";" 
+                                                        << rads_to_degrees(end_angle_debug) << ";"
+                                                        << rads_to_degrees(off_set_debug) << ";"
+                                                        << start_ind_debug << ";"
+                                                        << end_ind_debug << ")\n[";
+                        int hits = 0;
+                        for(int y=0;y<transformed_scans[source_name]->ranges.size();y++){
+                            if(consider_val(y,start_ind_debug,end_ind_debug)){ 
+                                debug_ss << transformed_scans[source_name]->ranges[y] << ";";
+                                if(transformed_scans[source_name]->ranges[y] != INFINITY){
+                                    hits ++;
+                                }
+                            }
+                        }
+                        debug_ss << "] \nHITS: "<< hits << std::endl;
+                        //TDM END
                         debug_ss << source_name << ": Scan fused with former values, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                     }
                 }
@@ -296,7 +320,7 @@ public:
         */
     }
 
-    void fuseScans(int resolution, sensor_msgs::msg::LaserScan::SharedPtr scan1,sensor_msgs::msg::LaserScan::SharedPtr scan2, bool persistent_mode = false, double min_angle = 0.0, double max_angle = 2*M_PI) {
+    void fuseScans(int resolution, sensor_msgs::msg::LaserScan::SharedPtr scan1,sensor_msgs::msg::LaserScan::SharedPtr scan2, bool persistent_mode = false, double min_angle = 0.0, double max_angle = 2*M_PI, std::string source_name = "") {
         //merge scan2 in scan1, they have to be same size.
         //if persistent_mode: the scan2 will override scan1 values when angles are between angle_min and angle_max. scan2 will update scan1 on its visible area.
         //fuse datas
@@ -314,6 +338,12 @@ public:
         else{
             int start_ind = angle_to_index(min_angle,resolution);
             int end_ind = angle_to_index(max_angle,resolution);
+            int former_start_ind = start_ind;
+            int former_end_ind = end_ind;
+            if(sources_var[source_name]["persistence_former_start_ind"] != ""){
+                former_start_ind = std::stoi(sources_var[source_name]["persistence_former_start_ind"]);
+                former_end_ind = std::stoi(sources_var[source_name]["persistence_former_end_ind"]);
+            }
             for (int i = 0; i < resolution; ++i) { 
                 //we take the signal of scan2 when we are in its angles bounds
                 /*
@@ -323,11 +353,21 @@ public:
                 RCLCPP_INFO(this->get_logger(), "max_index: %d", end_ind);
                 */
                 if(consider_val(i,start_ind,end_ind)){
-                    scan1->ranges[i] = scan2->ranges[i];
-                    scan1->intensities[i] = scan2->intensities[i];
+                    if(consider_val(i,former_start_ind,former_end_ind)){ //point that were already in the area and might have been updated already
+                        if(scan2->ranges[i]<scan1->ranges[i]){
+                            scan1->ranges[i] = scan2->ranges[i];
+                            scan1->intensities[i] = scan2->intensities[i];
+                        }
+                    }
+                    else{
+                        scan1->ranges[i] = scan2->ranges[i];
+                        scan1->intensities[i] = scan2->intensities[i];
+                    }
                 }
                 //otherwise we don't change scan1
             }
+            sources_var[source_name]["persistence_former_start_ind"]=std::to_string(start_ind);
+            sources_var[source_name]["persistence_former_end_ind"]=std::to_string(end_ind);
         }
     }
 
@@ -409,6 +449,8 @@ public:
             sources_var[source_name]["frame"] = "";
             sources_var[source_name]["frame_trans_vector"] = "";
             sources_var[source_name]["frame_rot_vector"] = "";
+            sources_var[source_name]["persistence_former_start_ind"] = "";
+            sources_var[source_name]["persistence_former_end_ind"] = "";
             raw_scan_mutexes[source_name]; //enought to init mutex
         }
     }
