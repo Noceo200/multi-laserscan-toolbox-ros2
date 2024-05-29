@@ -75,6 +75,12 @@ public:
         //timer for publisher (RPLidars are around 7Hz for example)
         publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>(topic_out, default_qos);
         timer_ = create_wall_timer(std::chrono::milliseconds(int(1000/rate)), std::bind(&LaserScanToolboxNode::fuseAndPublish, this));
+    
+        //initialize times
+        update_stamp();
+        current_source_latest_stamp = TimeToDouble(current_global_stamp);
+        prev_source_latest_stamp = TimeToDouble(current_global_stamp);
+
     }
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -87,7 +93,7 @@ public:
     void ScanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg,std::string source_name) {
         std::stringstream debug_ss;
         bool ready = false;
-        debug_ss << "\n\n" << source_name << ": Scan received" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+        debug_ss << std::fixed << "\n\n" << source_name << ": Scan received" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
         //we get frame and transformation of the sensor before to use the data
         if (sources_var[source_name]["frame"] == "" || sources_var[source_name]["frame_trans_vector"] == ""){
             sources_var[source_name]["frame"] = msg->header.frame_id;
@@ -141,7 +147,7 @@ public:
             sensor_msgs::msg::LaserScan::SharedPtr fused_scan_360 = new_360_scan(); //the final fused scan can be a non 360 scan, but we first fuse the 360deg scans
             //the resolution should be same that every other transformed_scans from sources
             int resolution_360 = fused_scan_360->ranges.size();
-            debug_ss << "\n\nStarting received scan transformations: Other sources may arrive later" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+            debug_ss << std::fixed << "\n\nStarting received scan transformations: Other sources may arrive later" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
             //Scan transformations and processing according to configurations
             for (const auto& pair1 : raw_scans) {
                 //Get new data
@@ -231,9 +237,13 @@ public:
             debug_ss <<"    |\n    |\n    |\n    V" << "\nStarting FUSION (Global timestamp: " << TimeToDouble(current_global_stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
             //Fusion
             int fused_scans_nb = 0;
+            prev_source_latest_stamp = current_source_latest_stamp;
             for (const auto& pair1 : transformed_scans) {
                 std::string source_name = pair1.first;
                 double last_stamp = TimeToDouble(transformed_scans[source_name]->header.stamp); //we want last timestamp of current scan used
+                if(current_source_latest_stamp < last_stamp){ //update latest source time
+                    current_source_latest_stamp = last_stamp;
+                }
                 double dt_out = std::stod(sources_config[source_name]["timeout"]);
                 if(dt_out == 0.0 || last_stamp >= TimeToDouble(current_global_stamp)-dt_out){
                     fuseScans(resolution_360, fused_scan_360, transformed_scans[source_name]);
@@ -253,15 +263,17 @@ public:
                 double dist = fused_scan_360->ranges[i];
                 if(consider_val(i,angle_to_index(angle_min,resolution_360),angle_to_index(angle_max,resolution_360)) && dist<=range_max && dist>=range_min){
                     fused_scan->ranges[new_i] = fused_scan_360->ranges[i]; //new_i should naturally go from 0 to resolution because consider_val should prevent more or less values to go in
+                    fused_scan->intensities[new_i] = fused_scan_360->intensities[i];
                 }
             }
 
             //put clock
             update_stamp();
-            fused_scan->header.stamp = current_global_stamp; 
+            //fused_scan->header.stamp = current_global_stamp; 
+            fused_scan->header.stamp = DoubleToTime(current_source_latest_stamp); //based on last source stamp rather than global time
 
-            // Publish the fused laser scan
-            if(fused_scans_nb>0){
+            // Publish the fused laser scan only if it have been update
+            if(fused_scans_nb>0 && current_source_latest_stamp != prev_source_latest_stamp){
                 publisher_->publish(*fused_scan); 
             
                 /*
@@ -298,7 +310,7 @@ public:
                 }
             }else{
                 debug_ss << "    |\n    |\n    |\n    V"
-                         << "\nNo scan published."
+                         << "\nNo scan published. (No sources received yet or no source updated its former data)"
                          << std::endl;
             }
 
@@ -651,6 +663,8 @@ private:
     builtin_interfaces::msg::Time simu_timestamp; //used for simuation
     rclcpp::Clock::SharedPtr clock; //used if not a simulation
     builtin_interfaces::msg::Time current_global_stamp; //store current time
+    double current_source_latest_stamp;
+    double prev_source_latest_stamp;
     //odometry
     nav_msgs::msg::Odometry::SharedPtr odom_msg_former;
     nav_msgs::msg::Odometry::SharedPtr odom_msg_new;
