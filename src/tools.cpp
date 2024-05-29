@@ -1,5 +1,5 @@
 /*
-LAST MODIF(DD/MM/YYYY): 17/04/2024
+LAST MODIF(DD/MM/YYYY): 29/05/2024
 */
 
 #include "rclcpp/rclcpp.hpp"
@@ -587,6 +587,13 @@ double TimeToDouble(builtin_interfaces::msg::Time& stamp){
     return static_cast<double>(stamp.sec) + static_cast<double>(stamp.nanosec) * 1e-9;
 }
 
+builtin_interfaces::msg::Time DoubleToTime(double& seconds){
+    builtin_interfaces::msg::Time time_msg;
+    time_msg.sec = static_cast<int32_t>(seconds);
+    time_msg.nanosec = static_cast<uint32_t>((seconds - time_msg.sec) * 1e9);
+    return time_msg;
+}
+
 bool consider_val(int current_ind, int start_ind, int end_ind){
     // return true if current_ind is between start_ind and end_ind according to a circle reference.
     if(start_ind>end_ind){ //if interval pass throught the origin of the circle, we test considering the split into 2 interval
@@ -600,7 +607,7 @@ bool consider_val(int current_ind, int start_ind, int end_ind){
 int angle_to_index(double alpha, int resolution){
     //return index of angle alpha, in a table with 'resolution' values placed from 0 to 360 degree.
     // Normalize the angle to the range [0, 2*M_PI)
-    alpha = std::fmod(alpha, 2 * M_PI);
+    alpha = std::fmod(alpha, 2 * M_PI); //return negative number if alpha is negative initially
     //debug_ss << "\nAngle_to_index: "<< " mod: " << alpha;
     if (alpha < 0) {
         alpha += 2 * M_PI;

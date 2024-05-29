@@ -165,7 +165,7 @@ public:
                         double x_off = 0.0;
                         double y_off = 0.0;
                         double tetha_off = 0.0;
-                        double off_set_debug; //TDM, offset to apply so that we are in the map frame when debuging an area
+                        //double off_set_debug; //debuging persistence, offset to apply so that we are in the map frame when debuging an area
                         if(odom_msg_new != nullptr){
                             mutex_odom.lock();
                             nav_msgs::msg::Odometry::SharedPtr current_odom(new nav_msgs::msg::Odometry(*odom_msg_new)); //copy data
@@ -176,7 +176,7 @@ public:
                                 x_off = current_odom->pose.pose.position.x - odom_msg_former->pose.pose.position.x;
                                 y_off = current_odom->pose.pose.position.y - odom_msg_former->pose.pose.position.y;
                                 tetha_off = sawtooth(euler_heading_new.z - euler_heading_former.z);
-                                off_set_debug = euler_heading_new.z;
+                                //off_set_debug = euler_heading_new.z; //debuging persistence 
                                 odom_msg_former = current_odom;
                             }
                             else{ //otherwise we just save odometry for next frame
@@ -197,7 +197,7 @@ public:
                         double angle_start = std::stod(sources_config[source_name]["start_angle"])+off_angle;
                         double angle_end = std::stod(sources_config[source_name]["end_angle"])+off_angle;
                         fuseScans(resolution_360,transformed_scans[source_name], transformed_scan_local, true, angle_start, angle_end, source_name);
-                        //TDM START for debuging persistence areas
+                        /* START for debuging persistence areas
                         double start_angle_debug = degrees_to_rads(170)-off_set_debug; //angles in map frame
                         double end_angle_debug = degrees_to_rads(190)-off_set_debug;
                         int start_ind_debug = angle_to_index(start_angle_debug,resolution_360); //indexes in scan, so in robot frame
@@ -217,7 +217,7 @@ public:
                             }
                         }
                         debug_ss << "] \nHITS: "<< hits << std::endl;
-                        //TDM END
+                        // debugging END*/
                         debug_ss << source_name << ": Scan fused with former values, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                     }
                 }
