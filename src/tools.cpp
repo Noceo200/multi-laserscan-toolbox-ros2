@@ -1,5 +1,5 @@
 /*
-LAST MODIF(DD/MM/YYYY): 29/05/2024
+LAST MODIF(DD/MM/YYYY): 30/05/2024
 */
 
 #include "rclcpp/rclcpp.hpp"
@@ -633,17 +633,17 @@ int remap_scan_index(int prev_ind, double prev_angle_start, double prev_angle_en
     double new_angle_incr = new_elong/new_reso;
     int reso_360 = static_cast<int>(round(2*M_PI/prev_angle_incr)); //resoluton that would have prev_list if on a 360deg circle list
 
-   //offset gestion
+    //offset gestion
     double angle_offset = sawtooth(prev_angle_start-new_angle_start);
     if(angle_offset<0){
         angle_offset += 2*M_PI;
     }
     //should have offset between [0,2Pi]
     int ind_offset = angle_to_index(angle_offset,reso_360); //should return index between [0,reso_360]
-    new_ind = static_cast<int>(round(fmod(prev_ind + ind_offset,reso_360)));
+    double new_ind_temp = fmod(prev_ind + ind_offset,reso_360);
     //different reso gestion 
-    new_ind = static_cast<int>(round((prev_angle_incr*new_ind)/new_angle_incr));
-    
+    new_ind = static_cast<int>(round((prev_angle_incr/new_angle_incr)*new_ind_temp));
+
     return new_ind;
 }
 
