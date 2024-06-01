@@ -259,12 +259,16 @@ public:
             fused_scan = new_clean_scan();
             int resolution = fused_scan->ranges.size();
             for(int i=0; i<resolution_360;i++){
-                //This remap will only be influenced if the wanted final scan is not 360deg.
+                //By construction, Angle_incr will be the same,
+                //So this remap will only be influenced if the wanted final scan have a different angle_start than 0.0. It just apply the offset in that case
                 int new_i = remap_scan_index(i, fused_scan_360->angle_min, fused_scan_360->angle_max, resolution_360, fused_scan->angle_min, fused_scan->angle_max, resolution);
                 double dist = fused_scan_360->ranges[i];
-                if(new_i>=0 && new_i<resolution && consider_val(i,angle_to_index(angle_min,resolution_360),angle_to_index(angle_max,resolution_360)) && dist<=range_max && dist>=range_min){
-                    fused_scan->ranges[new_i] = fused_scan_360->ranges[i]; //new_i should naturally go from 0 to resolution because consider_val should prevent more or less values to go in
-                    fused_scan->intensities[new_i] = fused_scan_360->intensities[i];
+                //new_i  = index on a 360deg scan of angle_incr and start angle like fused_scan
+                if(consider_val(new_i,0,resolution-1) && dist<=range_max && dist>=range_min){
+                    if(dist < fused_scan->ranges[new_i]){
+                        fused_scan->ranges[new_i] = dist; //new_i should naturally go from 0 to resolution because consider_val should prevent more or less values to go in
+                        fused_scan->intensities[new_i] = fused_scan_360->intensities[i];
+                    }
                 }
             }
 
@@ -594,9 +598,12 @@ public:
             for(int i =0; i<laser_raw->ranges.size(); i++){
                 //this remap will only be influenced if the source as not an origin of 0.0 and if the angle_increment is different from the wanted final scan
                 int new_i = remap_scan_index(i, laser_raw->angle_min, laser_raw->angle_max, prev_reso, transformed_scan->angle_min, transformed_scan->angle_max, new_reso);
-                if(new_i<new_reso && new_i>=0){
-                    transformed_scan->ranges[new_i] = laser_raw->ranges[i];
-                    transformed_scan->intensities[new_i] = laser_raw->intensities[i];
+                //new_i is indexes in a 360deg scan with angle_incr and angle start of transformed_scan
+                if(consider_val(new_i,0,new_reso-1)){
+                    if(laser_raw->ranges[i]<transformed_scan->ranges[new_i]){
+                        transformed_scan->ranges[new_i] = laser_raw->ranges[i];
+                        transformed_scan->intensities[new_i] = laser_raw->intensities[i];
+                    }
                 }
             }
             //debug_ss << "\nDEBUG_PERSO: total_Hits final: " << count << std::endl;

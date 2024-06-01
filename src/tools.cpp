@@ -1,5 +1,5 @@
 /*
-LAST MODIF(DD/MM/YYYY): 30/05/2024
+LAST MODIF(DD/MM/YYYY): 01/06/2024
 */
 
 #include "rclcpp/rclcpp.hpp"
@@ -623,28 +623,31 @@ double index_to_angle(int ind, int resolution, double elongation){ //default elo
 }
 
 int remap_scan_index(int prev_ind, double prev_angle_start, double prev_angle_end, double prev_reso, double new_angle_start, double new_angle_end, double new_reso){
-    int new_ind;
+    int new_ind_360;
     /*
-    return the index in a new scan list.
+    return the index in a new scan list. But return it as if the final scan was a 360deg scan, because otherwise some indexes are not possible, so this function needs to be use with consider_val to filter the points you want to keep.
     */
     double prev_elong = prev_angle_end - prev_angle_start;  
     double new_elong = new_angle_end - new_angle_start;
     double prev_angle_incr = prev_elong/prev_reso;
     double new_angle_incr = new_elong/new_reso;
     int reso_360 = static_cast<int>(round(2*M_PI/prev_angle_incr)); //resoluton that would have prev_list if on a 360deg circle list
+    int prev_ind_360 = fmod(prev_ind + angle_to_index(prev_angle_start,reso_360),reso_360); //index that would be prev_ind in a 360 deg scan
 
     //offset gestion
-    double angle_offset = sawtooth(prev_angle_start-new_angle_start);
-    if(angle_offset<0){
-        angle_offset += 2*M_PI;
+    //the angle offset according to the new scan we have with prev_ind_360 is the start angle of the new scan
+    int ind_offset = angle_to_index(new_angle_start,reso_360); //should return index between [0,reso_360]
+    //new index considering offset in a 360deg scan with reso_360
+    int new_ind_360_temp = fmod(prev_ind_360 - ind_offset,reso_360);
+    if (new_ind_360_temp<0){
+        new_ind_360_temp += reso_360;
     }
-    //should have offset between [0,2Pi]
-    int ind_offset = angle_to_index(angle_offset,reso_360); //should return index between [0,reso_360]
-    double new_ind_temp = fmod(prev_ind + ind_offset,reso_360);
-    //different reso gestion 
-    new_ind = static_cast<int>(round((prev_angle_incr/new_angle_incr)*new_ind_temp));
 
-    return new_ind;
+    //different reso gestion
+    new_ind_360 = static_cast<int>(round((prev_angle_incr/new_angle_incr)*new_ind_360_temp));
+    //new_ind_360 = angle_to_index(index_to_angle(new_ind_360_temp,reso_360),new_reso);
+
+    return new_ind_360;
 }
 
 double sawtooth(double x) {
