@@ -52,21 +52,15 @@ public:
             clock_subscription_ = this->create_subscription<rosgraph_msgs::msg::Clock>("/clock", sensor_qos, std::bind(&LaserScanToolboxNode::ClockCallback, this, std::placeholders::_1));
         }
 
-        bool persistence_used = false;
         //Sources
         for (const auto& pair1 : sources_config) {
             std::string source_name = pair1.first;
             rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr subscription_ = this->create_subscription<sensor_msgs::msg::LaserScan>(sources_config[source_name]["topic"], sensor_qos, [this,source_name](const sensor_msgs::msg::LaserScan::SharedPtr msg){ScanCallback(msg,source_name);});
             // Store the subscription in the map if needed for futur handling
             subscriptions_[pair1.first] = subscription_;
-            if (stringToBool(sources_config[pair1.first]["persistence"])){
-                persistence_used = true;
-            }
         }
         //Odometry
-        if(persistence_used){
-            odom_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(odom_topic, sensor_qos, std::bind(&LaserScanToolboxNode::odomCallback, this, std::placeholders::_1));
-        }
+        odom_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(odom_topic, sensor_qos, std::bind(&LaserScanToolboxNode::odomCallback, this, std::placeholders::_1));
 
         /*
         Publisher
@@ -87,7 +81,18 @@ public:
         //Update odometry
         mutex_odom.lock();
         odom_msg_new = msg;
+        sav_odom(odom_msg_list, *msg, TimeToDouble(msg->header.stamp), odom_delay_limit);
         mutex_odom.unlock();
+
+        /*if(odom_msg_list.size() > 0){
+            std::stringstream debug_ss;
+            debug_ss << std::fixed << "\nNb odometry saved: " << odom_msg_list.size()
+                << "\nFirst Odom: " << TimeToDouble(odom_msg_list[0].header.stamp)
+                << "\nLast Odom: " << TimeToDouble(odom_msg_list[odom_msg_list.size()-1].header.stamp)
+                << std::endl;
+            std::string debug_msg = debug_ss.str();
+            RCLCPP_INFO(this->get_logger(), "%s",debug_msg.c_str());
+        }*/
     }
 
     void ScanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg,std::string source_name) {
@@ -148,6 +153,7 @@ public:
             //the resolution should be same that every other transformed_scans from sources
             int resolution_360 = fused_scan_360->ranges.size();
             debug_ss << std::fixed << "\n\nStarting received scan transformations: Other sources may arrive later" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+            prev_source_latest_stamp = current_source_latest_stamp;
             //Scan transformations and processing according to configurations
             for (const auto& pair1 : raw_scans) {
                 //Get new data
@@ -231,29 +237,55 @@ public:
                     transformed_scans[source_name]=transformed_scan_local;
                     debug_ss << source_name << ": Scan transformed, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                 }
-            }
-            
-            update_stamp();
-            debug_ss <<"    |\n    |\n    |\n    V" << "\nStarting FUSION (Global timestamp: " << TimeToDouble(current_global_stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-            //Fusion
-            int fused_scans_nb = 0;
-            prev_source_latest_stamp = current_source_latest_stamp;
-            for (const auto& pair1 : transformed_scans) {
-                std::string source_name = pair1.first;
+
+                //getting last time stamp
                 double last_stamp = TimeToDouble(transformed_scans[source_name]->header.stamp); //we want last timestamp of current scan used
                 if(current_source_latest_stamp < last_stamp){ //update latest source time
                     current_source_latest_stamp = last_stamp;
                 }
+            }
+            
+            update_stamp();
+            debug_ss <<"    |\n    |\n    |\n    V" << "\nStarting FUSION (Global timestamp: " << TimeToDouble(current_global_stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+            
+            //Fusion
+            int fused_scans_nb = 0;
+            nav_msgs::msg::Odometry ref_odom = get_estimated_odom(current_source_latest_stamp, odom_msg_list, false, debug_ss); //odom of newest LaserScan received
+            double ref_heading = odom_to_heading(ref_odom);
+            for (const auto& pair1 : transformed_scans) {
+                std::string source_name = pair1.first;
                 double dt_out = std::stod(sources_config[source_name]["timeout"]);
-                if(dt_out == 0.0 || last_stamp >= TimeToDouble(current_global_stamp)-dt_out){
+                double source_stamp = TimeToDouble(transformed_scans[source_name]->header.stamp);
+                if(dt_out == 0.0 || source_stamp >= TimeToDouble(current_global_stamp)-dt_out){
+                    //we correct the source scan to match how it should be at the time of the odometry of the newest source received
+                    nav_msgs::msg::Odometry source_odom = get_estimated_odom(source_stamp, odom_msg_list, false, debug_ss);
+                    double x_off = ref_odom.pose.pose.position.x - source_odom.pose.pose.position.x;
+                    double y_off = ref_odom.pose.pose.position.y - source_odom.pose.pose.position.y;
+                    double source_heading = odom_to_heading(source_odom);
+                    double tetha_off = sawtooth(ref_heading - source_heading);
+                    debug_ss << source_name << ": Data late of (from newest scan): " << current_source_latest_stamp-source_stamp <<  " s, Odometry correction (x,y,tetha): (" << x_off << "," << y_off << "," << tetha_off << ")" << std::endl;
+                    transform_360_data(transformed_scans[source_name],-x_off,-y_off,-tetha_off,debug_ss);
+                    transformed_scans[source_name]->header.stamp = current_global_stamp;
+                    //fusion
                     fuseScans(resolution_360, fused_scan_360, transformed_scans[source_name]);
-                    debug_ss << "fused_scan <-- " << source_name << " (data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                    debug_ss << "   fused_scan <-- " << source_name << " (raw data stamp: " << source_stamp << " s) (corrected data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                     fused_scans_nb ++;
                 }
                 else{
                     debug_ss << "fused_scan xxx " << source_name << " exceed its timeout value of " << dt_out << "s" << " (data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                 }
             }
+
+            //get last time
+            update_stamp();
+            //correct 360 fused scan to newest odometry
+            /*nav_msgs::msg::Odometry newest_odom = get_estimated_odom(TimeToDouble(current_global_stamp), odom_msg_list, false, debug_ss);
+            double x_off = newest_odom.pose.pose.position.x - ref_odom.pose.pose.position.x;
+            double y_off = newest_odom.pose.pose.position.y - ref_odom.pose.pose.position.y;
+            double newest_heading = odom_to_heading(newest_odom);
+            double tetha_off = sawtooth(newest_heading - ref_heading);
+            debug_ss << "Final fused scan: Data late of (from current odometry): " << TimeToDouble(current_global_stamp)-current_source_latest_stamp <<  " s, Odometry correction (x,y,tetha): (" << x_off << "," << y_off << "," << tetha_off << ")" << std::endl;
+            transform_360_data(fused_scan_360,-x_off,-y_off,-tetha_off,debug_ss);*/
 
             //we fill the final fused scan by keeping only the points that should be kept according to the angles selected, and the ranges
             fused_scan = new_clean_scan();
@@ -273,7 +305,6 @@ public:
             }
 
             //put clock
-            update_stamp();
             //fused_scan->header.stamp = current_global_stamp; 
             fused_scan->header.stamp = DoubleToTime(current_source_latest_stamp); //based on last source stamp rather than global time
 
@@ -479,6 +510,7 @@ public:
         this->declare_parameter("topic_out","not_set"); 
         this->declare_parameter("new_frame","not_set");
         this->declare_parameter("odom_topic", "not_set");
+        this->declare_parameter("odom_delay_limit", 0.0);
         this->declare_parameter("debug",false);
         this->declare_parameter("debug_file_path","lasertoolbox_debug.txt");
         this->declare_parameter("show_ranges",false);
@@ -514,6 +546,7 @@ public:
         this->get_parameter("topic_out",topic_out); 
         this->get_parameter("new_frame",new_frame);
         this->get_parameter("odom_topic", odom_topic);
+        this->get_parameter("odom_delay_limit", odom_delay_limit);
         this->get_parameter("debug",debug);
         this->get_parameter("debug_file_path",debug_file_path); 
         this->get_parameter("show_ranges",show_ranges); 
@@ -551,6 +584,7 @@ public:
                 << "\ntopic_out: " << topic_out
                 << "\nnew_frame: " << new_frame
                 << "\nodom_topic: " << odom_topic
+                << "\nodom_delay_limit: " << odom_delay_limit
                 << "\ndebug: " << debug
                 << "\ndebug_file_path: " << debug_file_path
                 << "\nshow_ranges: " << show_ranges
@@ -636,6 +670,7 @@ private:
     std::string topic_out;
     std::string new_frame;
     std::string odom_topic;
+    double odom_delay_limit;
     bool use_sim_time = false;
     bool debug;
     std::string debug_file_path;
@@ -677,6 +712,7 @@ private:
     double current_source_latest_stamp;
     double prev_source_latest_stamp;
     //odometry
+    std::vector<nav_msgs::msg::Odometry> odom_msg_list;
     nav_msgs::msg::Odometry::SharedPtr odom_msg_former;
     nav_msgs::msg::Odometry::SharedPtr odom_msg_new;
     //concurrence
