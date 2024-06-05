@@ -250,7 +250,7 @@ public:
             
             //Fusion
             int fused_scans_nb = 0;
-            nav_msgs::msg::Odometry ref_odom = get_estimated_odom(current_source_latest_stamp, odom_msg_list, false, debug_ss); //odom of newest LaserScan received
+            nav_msgs::msg::Odometry ref_odom = get_estimated_odom(current_source_latest_stamp, odom_msg_list, extrapolate_odometry, false, debug_ss); //odom of newest LaserScan received
             double ref_heading = odom_to_heading(ref_odom);
             for (const auto& pair1 : transformed_scans) {
                 std::string source_name = pair1.first;
@@ -258,7 +258,7 @@ public:
                 double source_stamp = TimeToDouble(transformed_scans[source_name]->header.stamp);
                 if(dt_out == 0.0 || source_stamp >= TimeToDouble(current_global_stamp)-dt_out){
                     //we correct the source scan to match how it should be at the time of the odometry of the newest source received
-                    nav_msgs::msg::Odometry source_odom = get_estimated_odom(source_stamp, odom_msg_list, false, debug_ss);
+                    nav_msgs::msg::Odometry source_odom = get_estimated_odom(source_stamp, odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
                     double x_off = ref_odom.pose.pose.position.x - source_odom.pose.pose.position.x;
                     double y_off = ref_odom.pose.pose.position.y - source_odom.pose.pose.position.y;
                     double source_heading = odom_to_heading(source_odom);
@@ -279,7 +279,7 @@ public:
             //get last time
             update_stamp();
             //correct 360 fused scan to newest odometry
-            /*nav_msgs::msg::Odometry newest_odom = get_estimated_odom(TimeToDouble(current_global_stamp), odom_msg_list, false, debug_ss);
+            /*nav_msgs::msg::Odometry newest_odom = get_estimated_odom(TimeToDouble(current_global_stamp), odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
             double x_off = newest_odom.pose.pose.position.x - ref_odom.pose.pose.position.x;
             double y_off = newest_odom.pose.pose.position.y - ref_odom.pose.pose.position.y;
             double newest_heading = odom_to_heading(newest_odom);
@@ -511,9 +511,11 @@ public:
         this->declare_parameter("new_frame","not_set");
         this->declare_parameter("odom_topic", "not_set");
         this->declare_parameter("odom_delay_limit", 0.0);
+        this->declare_parameter("extrapolate_odometry", false);
         this->declare_parameter("debug",false);
         this->declare_parameter("debug_file_path","lasertoolbox_debug.txt");
         this->declare_parameter("show_ranges",false);
+        this->declare_parameter("show_odometry_detail",false);
         this->declare_parameter("sources","not_set"); 
         this->declare_parameter("angle_min",0.0);
         this->declare_parameter("angle_max",0.0);
@@ -547,9 +549,11 @@ public:
         this->get_parameter("new_frame",new_frame);
         this->get_parameter("odom_topic", odom_topic);
         this->get_parameter("odom_delay_limit", odom_delay_limit);
+        this->get_parameter("extrapolate_odometry", extrapolate_odometry);
         this->get_parameter("debug",debug);
         this->get_parameter("debug_file_path",debug_file_path); 
         this->get_parameter("show_ranges",show_ranges); 
+        this->get_parameter("show_odometry_detail",show_odometry_detail); 
         this->get_parameter("angle_min",angle_min);
         this->get_parameter("angle_max",angle_max);
         this->get_parameter("angle_increment",angle_increment);
@@ -585,9 +589,11 @@ public:
                 << "\nnew_frame: " << new_frame
                 << "\nodom_topic: " << odom_topic
                 << "\nodom_delay_limit: " << odom_delay_limit
+                << "\nextrapolate_odometry: " << extrapolate_odometry
                 << "\ndebug: " << debug
                 << "\ndebug_file_path: " << debug_file_path
                 << "\nshow_ranges: " << show_ranges
+                << "\nshow_odometry_detail: " << show_odometry_detail
                 << "\nangle_min: " << angle_min
                 << "\nangle_max: " << angle_max
                 << "\nangle_increment: " << angle_increment
@@ -671,10 +677,12 @@ private:
     std::string new_frame;
     std::string odom_topic;
     double odom_delay_limit;
+    bool extrapolate_odometry;
     bool use_sim_time = false;
     bool debug;
     std::string debug_file_path;
     bool show_ranges;
+    bool show_odometry_detail;
     double angle_min;
     double angle_max;
     double angle_increment;

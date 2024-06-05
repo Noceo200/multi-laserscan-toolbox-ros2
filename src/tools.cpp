@@ -16,6 +16,58 @@ LAST MODIF(DD/MM/YYYY): 03/06/2024
 #include "tools.h"
 #include "nav_msgs/msg/odometry.hpp"
 
+nav_msgs::msg::Odometry extrapolate_odometry(nav_msgs::msg::Odometry &prev_prev_odom, nav_msgs::msg::Odometry &prev_odom, double time_to_add) {
+    nav_msgs::msg::Odometry extrapolated_odom;
+
+    // Calculate the time difference between the previous odometry messages
+    double dt = TimeToDouble(prev_odom.header.stamp) - TimeToDouble(prev_prev_odom.header.stamp);
+
+    // Ensure the time difference is positive
+    if (dt <= 0) {
+        throw std::runtime_error("Extrapolation of odometry: Invalid time difference between odometry messages, prev_odom stamp should be > prev_prev_odom stamp");
+    }
+
+    // Calculate linear velocities
+    double vx = (prev_odom.pose.pose.position.x - prev_prev_odom.pose.pose.position.x) / dt;
+    double vy = (prev_odom.pose.pose.position.y - prev_prev_odom.pose.pose.position.y) / dt;
+    double vz = (prev_odom.pose.pose.position.z - prev_prev_odom.pose.pose.position.z) / dt;
+
+    // Extrapolate position
+    extrapolated_odom.pose.pose.position.x = prev_odom.pose.pose.position.x + vx * time_to_add;
+    extrapolated_odom.pose.pose.position.y = prev_odom.pose.pose.position.y + vy * time_to_add;
+    extrapolated_odom.pose.pose.position.z = prev_odom.pose.pose.position.z + vz * time_to_add;
+
+    // Calculate angular velocities (quaternion differentiation)
+    auto q1 = prev_prev_odom.pose.pose.orientation;
+    auto q2 = prev_odom.pose.pose.orientation;
+
+    double dq_w = (q2.w - q1.w) / dt;
+    double dq_x = (q2.x - q1.x) / dt;
+    double dq_y = (q2.y - q1.y) / dt;
+    double dq_z = (q2.z - q1.z) / dt;
+
+    // Extrapolate orientation
+    extrapolated_odom.pose.pose.orientation.w = prev_odom.pose.pose.orientation.w + dq_w * time_to_add;
+    extrapolated_odom.pose.pose.orientation.x = prev_odom.pose.pose.orientation.x + dq_x * time_to_add;
+    extrapolated_odom.pose.pose.orientation.y = prev_odom.pose.pose.orientation.y + dq_y * time_to_add;
+    extrapolated_odom.pose.pose.orientation.z = prev_odom.pose.pose.orientation.z + dq_z * time_to_add;
+
+    // Normalize the quaternion
+    double norm = sqrt(
+        extrapolated_odom.pose.pose.orientation.w * extrapolated_odom.pose.pose.orientation.w +
+        extrapolated_odom.pose.pose.orientation.x * extrapolated_odom.pose.pose.orientation.x +
+        extrapolated_odom.pose.pose.orientation.y * extrapolated_odom.pose.pose.orientation.y +
+        extrapolated_odom.pose.pose.orientation.z * extrapolated_odom.pose.pose.orientation.z
+    );
+
+    extrapolated_odom.pose.pose.orientation.w /= norm;
+    extrapolated_odom.pose.pose.orientation.x /= norm;
+    extrapolated_odom.pose.pose.orientation.y /= norm;
+    extrapolated_odom.pose.pose.orientation.z /= norm;
+
+    return extrapolated_odom;
+}
+
 nav_msgs::msg::Odometry interpolate_odometry(nav_msgs::msg::Odometry &odom1, nav_msgs::msg::Odometry &odom2, double ratio) {
     nav_msgs::msg::Odometry interpolated_odom;
 
@@ -74,8 +126,11 @@ double odom_to_heading(nav_msgs::msg::Odometry &odom) {
     return adapt_angle(euler).z;
 }
 
-nav_msgs::msg::Odometry get_estimated_odom(double target_time, std::vector<nav_msgs::msg::Odometry> &odoms_list, bool log, std::stringstream &debug_ss) {
+nav_msgs::msg::Odometry get_estimated_odom(double target_time, std::vector<nav_msgs::msg::Odometry> &odoms_list,  bool extrapolate, bool log, std::stringstream &debug_ss) {
     nav_msgs::msg::Odometry estimated_odom = create_zero_odometry();
+    int nb_odoms = odoms_list.size();
+
+    if (log) {debug_ss << "------------------ODOM detail------------------";}
 
     if (odoms_list.empty()) {
         if (log) {
@@ -97,18 +152,53 @@ nav_msgs::msg::Odometry get_estimated_odom(double target_time, std::vector<nav_m
     }
 
     if (target_time >= TimeToDouble(odoms_list.back().header.stamp)) {
-        if (log) {
-            debug_ss << "\nTarget time is after or equal the newest recorded odometry. Returning the newest odometry."
-                     << "\nTarget time: " << target_time << " s"
-                     << "\n(x,y,tetha,stamp): (" << odoms_list.back().pose.pose.position.x << ","
-                     << odoms_list.back().pose.pose.position.y << ","
-                     << odom_to_heading(odoms_list.back()) << ","
-                     << TimeToDouble(odoms_list.back().header.stamp) << ")"<< std::endl;
+        if(extrapolate){
+            if(nb_odoms>1){
+                //extrapolation
+                auto prev_odom = odoms_list[nb_odoms-1];
+                auto prev_prev_odom = odoms_list[nb_odoms-2];
+                double prev_time = TimeToDouble(prev_odom.header.stamp);
+                double time_to_extrapolate = target_time-prev_time;
+                estimated_odom = extrapolate_odometry(prev_prev_odom, prev_odom, time_to_extrapolate);
+                estimated_odom.header.stamp = DoubleToTime(target_time);
+                if (log) {
+                    debug_ss << "\nTarget time is after or equal the newest recorded odometry. Extrapolation."
+                    << "\nTarget time: " << target_time << " s"
+                    << "\n(x,y,tetha,stamp) last-1 : (" << prev_prev_odom.pose.pose.position.x << ","
+                    << prev_prev_odom.pose.pose.position.y << ","
+                    << odom_to_heading(prev_prev_odom) << ","
+                    << TimeToDouble(prev_prev_odom.header.stamp) << ")"
+                    << "\n(x,y,tetha,stamp) last : (" << prev_odom.pose.pose.position.x << ","
+                    << prev_odom.pose.pose.position.y << ","
+                    << odom_to_heading(prev_odom) << ","
+                    << prev_time << ")"
+                    << "\n(x,y,tetha,stamp) extra : (" << estimated_odom.pose.pose.position.x << ","
+                    << estimated_odom.pose.pose.position.y << ","
+                    << odom_to_heading(estimated_odom) << ","
+                    << TimeToDouble(estimated_odom.header.stamp) << ")" << std::endl;
+                }
+                return estimated_odom;
+            }
+            else{
+                if (log) {debug_ss << "\nTarget time is after or equal the newest recorded odometry. Extrapolation ON but not enough odometry values (<2): Returning the newest odometry.";}
+            }
+
         }
-        return odoms_list.back();
+        else{
+            if (log) {debug_ss << "\nTarget time is after or equal the newest recorded odometry. Extrapolation OFF: Returning the newest odometry.";}
+        }
+        if (log) { 
+            debug_ss << "\nTarget time: " << target_time << " s"
+                    << "\n(x,y,tetha,stamp): (" << odoms_list.back().pose.pose.position.x << ","
+                    << odoms_list.back().pose.pose.position.y << ","
+                    << odom_to_heading(odoms_list.back()) << ","
+                    << TimeToDouble(odoms_list.back().header.stamp) << ")"<< std::endl;
+        }
+        return odoms_list.back(); //return that in any case if no extrapolation or not enough odometry values  
+
     }
 
-    for (size_t i = 1; i < odoms_list.size(); ++i) {
+    for (size_t i = 1; i < nb_odoms; ++i) {
         if (target_time < TimeToDouble(odoms_list[i].header.stamp)) {
             auto prev_odom = odoms_list[i - 1];
             auto next_odom = odoms_list[i];
@@ -118,7 +208,7 @@ nav_msgs::msg::Odometry get_estimated_odom(double target_time, std::vector<nav_m
             estimated_odom = interpolate_odometry(prev_odom, next_odom, ratio);
             estimated_odom.header.stamp = DoubleToTime(target_time);
             if (log) {
-                debug_ss << "\nTarget time is between odometries " << i - 1 << " and " << i << " on " << odoms_list.size() - 1 << ", interpolating."
+                debug_ss << "\nTarget time is between odometries " << i - 1 << " and " << i << " on " << nb_odoms - 1 << ", interpolating."
                          << "\nTarget time: " << target_time << " s"
                          << "\n(x,y,tetha,stamp) prev : (" << prev_odom.pose.pose.position.x << ","
                          << prev_odom.pose.pose.position.y << ","

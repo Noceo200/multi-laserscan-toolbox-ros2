@@ -15,10 +15,11 @@ LAST MODIF(DD/MM/YYYY): 03/06/2024
 #include "tf2_ros/buffer.h"
 #include "nav_msgs/msg/odometry.hpp"
 
-nav_msgs::msg::Odometry interpolate_odometry(nav_msgs::msg::Odometry &odom1, nav_msgs::msg::Odometry &odom2, double ratio);
+nav_msgs::msg::Odometry extrapolate_odometry(nav_msgs::msg::Odometry &prev_prev_odom, nav_msgs::msg::Odometry &prev_odom, double time_to_add);
+nav_msgs::msg::Odometry interpolate_odometry(nav_msgs::msg::Odometry &odom1, nav_msgs::msg::Odometry &odom2, double ratio, bool extrapolate);
 nav_msgs::msg::Odometry create_zero_odometry();
 double odom_to_heading(nav_msgs::msg::Odometry &odom);
-nav_msgs::msg::Odometry get_estimated_odom(double target_time, std::vector<nav_msgs::msg::Odometry> &odoms_list, bool log, std::stringstream &debug_ss);
+nav_msgs::msg::Odometry get_estimated_odom(double target_time, std::vector<nav_msgs::msg::Odometry> &odoms_list, bool extrapolate, bool log, std::stringstream &debug_ss);
 void sav_odom(std::vector<nav_msgs::msg::Odometry> &odoms_list, nav_msgs::msg::Odometry odom, double current_time, double odom_delay_limit);
 
 bool stringToBool(std::string &str);
