@@ -58,6 +58,10 @@ public:
             rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr subscription_ = this->create_subscription<sensor_msgs::msg::LaserScan>(sources_config[source_name]["topic"], sensor_qos, [this,source_name](const sensor_msgs::msg::LaserScan::SharedPtr msg){ScanCallback(msg,source_name);});
             // Store the subscription in the map if needed for futur handling
             subscriptions_[pair1.first] = subscription_;
+            //initialize the masks for persistence that will be updated after
+            if(stringToBool(sources_config[source_name]["persistence"])){
+                init_persist_map(source_name);
+            }
         }
         //Odometry
         odom_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(odom_topic, sensor_qos, std::bind(&LaserScanToolboxNode::odomCallback, this, std::placeholders::_1));
@@ -80,7 +84,7 @@ public:
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         //Update odometry
         mutex_odom.lock();
-        odom_msg_new = msg;
+        //odom_msg_new = msg;
         sav_odom(odom_msg_list, *msg, TimeToDouble(msg->header.stamp), odom_delay_limit);
         mutex_odom.unlock();
 
@@ -147,13 +151,26 @@ public:
 
     void fuseAndPublish() {
         std::stringstream debug_ss;
-        if(raw_scans.size() > 0){
+
+        //check if need to compute
+        prev_source_latest_stamp = current_source_latest_stamp;
+        for (const auto& pair1 : raw_scans) {
+            std::string source_name = pair1.first;
+            //getting last time stamp
+            double last_stamp = TimeToDouble(raw_scans[source_name]->header.stamp); //we want last timestamp of current scan used
+            if(current_source_latest_stamp < last_stamp){ //update latest source time
+                current_source_latest_stamp = last_stamp; //we update time of latest raw_scan
+            }
+        }
+
+        //compute
+        if(raw_scans.size() > 0 && current_source_latest_stamp != prev_source_latest_stamp){
             //fusion variables created here because need of resolutin_360
             sensor_msgs::msg::LaserScan::SharedPtr fused_scan_360 = new_360_scan(); //the final fused scan can be a non 360 scan, but we first fuse the 360deg scans
             //the resolution should be same that every other transformed_scans from sources
             int resolution_360 = fused_scan_360->ranges.size();
             debug_ss << std::fixed << "\n\nStarting received scan transformations: Other sources may arrive later" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-            prev_source_latest_stamp = current_source_latest_stamp;
+
             //Scan transformations and processing according to configurations
             for (const auto& pair1 : raw_scans) {
                 //Get new data
@@ -174,81 +191,41 @@ public:
                     }
                     else{
                         //we transform the former scan values according to how the bot moved between the 2 measures
-                        double x_off = 0.0;
-                        double y_off = 0.0;
-                        double tetha_off = 0.0;
+                        //we get odometry difference
+                        debug_ss << source_name << ": Persistence ON, getting different odometries (last and new)..." << std::endl;
+                        nav_msgs::msg::Odometry last_odom = get_estimated_odom(TimeToDouble(transformed_scans[source_name]->header.stamp), odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
+                        nav_msgs::msg::Odometry new_odom = get_estimated_odom(TimeToDouble(transformed_scan_local->header.stamp), odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
+                        double x_off = new_odom.pose.pose.position.x - last_odom.pose.pose.position.x;
+                        double y_off = new_odom.pose.pose.position.y - last_odom.pose.pose.position.y;
+                        double last_heading = odom_to_heading(last_odom);
+                        double new_heading = odom_to_heading(new_odom);
+                        double tetha_off = sawtooth(new_heading - last_heading);
                         //double off_set_debug; //debuging persistence, offset to apply so that we are in the map frame when debuging an area
-                        if(odom_msg_new != nullptr){
-                            mutex_odom.lock();
-                            nav_msgs::msg::Odometry::SharedPtr current_odom(new nav_msgs::msg::Odometry(*odom_msg_new)); //copy data
-                            mutex_odom.unlock();
-                            if(odom_msg_former != nullptr){ //if we have former odometry, we compute the offset
-                                geometry_msgs::msg::Vector3 euler_heading_former = adapt_angle(quaternion_to_euler3D(odom_msg_former->pose.pose.orientation)); //previous heading
-                                geometry_msgs::msg::Vector3 euler_heading_new = adapt_angle(quaternion_to_euler3D(current_odom->pose.pose.orientation)); //new heading
-                                x_off = current_odom->pose.pose.position.x - odom_msg_former->pose.pose.position.x;
-                                y_off = current_odom->pose.pose.position.y - odom_msg_former->pose.pose.position.y;
-                                tetha_off = sawtooth(euler_heading_new.z - euler_heading_former.z);
-                                //off_set_debug = euler_heading_new.z; //debuging persistence 
-                                odom_msg_former = current_odom;
-                            }
-                            else{ //otherwise we just save odometry for next frame
-                                odom_msg_former = current_odom;
-                            }
-                        }
-                        else{
-                            debug_ss << source_name << ":Persistence ON, but no Odometry messages received yet on topic '" << odom_topic << "'. Persistence will not work until odometry is received." << std::endl;
-                        }
-                        
                         if(x_off != 0.0 || y_off != 0.0 || tetha_off != 0.0 ){
                             transform_360_data(transformed_scans[source_name],-x_off,-y_off,-tetha_off,debug_ss);
                             //filter_360_data(transformed_scans[source_name],0.0, 2*M_PI, 0.0, std::stod(sources_config[source_name]["range_min"]), std::stod(sources_config[source_name]["range_max"]), debug_ss);
                             debug_ss << source_name << ": Persistence ON, motion detected, Former Scan adjusted. (x,y,tetha) offset: (" << x_off << "," << y_off << "," << tetha_off << ") m, rad " << std::endl;
                         }
+                        //the data is now at the time of the new received one
+                        transformed_scans[source_name]->header.stamp = transformed_scan_local->header.stamp;
+                        //we update the masks according to the scan
+                        update_persist_map(source_name,resolution_360);
                         //we fuse the scan with the former values, the new scan will update the former values only on its FOV equivalence on a 360 deg scan.
-                        double off_angle = stringToVector3(sources_var[source_name]["frame_rot_vector"]).z; //offset due to frame transformation, offset added by user already taken into consideration in specified angle interval for message
-                        double angle_start = std::stod(sources_config[source_name]["start_angle"])+off_angle;
-                        double angle_end = std::stod(sources_config[source_name]["end_angle"])+off_angle;
-                        fuseScans(resolution_360,transformed_scans[source_name], transformed_scan_local, true, angle_start, angle_end, source_name);
-                        /* START for debuging persistence areas
-                        double start_angle_debug = degrees_to_rads(170)-off_set_debug; //angles in map frame
-                        double end_angle_debug = degrees_to_rads(190)-off_set_debug;
-                        int start_ind_debug = angle_to_index(start_angle_debug,resolution_360); //indexes in scan, so in robot frame
-                        int end_ind_debug = angle_to_index(end_angle_debug,resolution_360);
-                        debug_ss << "Persitence area: (" << rads_to_degrees(start_angle_debug) << ";" 
-                                                        << rads_to_degrees(end_angle_debug) << ";"
-                                                        << rads_to_degrees(off_set_debug) << ";"
-                                                        << start_ind_debug << ";"
-                                                        << end_ind_debug << ")\n[";
-                        int hits = 0;
-                        for(int y=0;y<transformed_scans[source_name]->ranges.size();y++){
-                            if(consider_val(y,start_ind_debug,end_ind_debug)){ 
-                                debug_ss << transformed_scans[source_name]->ranges[y] << ";";
-                                if(transformed_scans[source_name]->ranges[y] != INFINITY){
-                                    hits ++;
-                                }
-                            }
-                        }
-                        debug_ss << "] \nHITS: "<< hits << std::endl;
-                        // debugging END*/
+                        //local fusion
+                        fuseScans(resolution_360,transformed_scans[source_name], transformed_scan_local, true, source_name);
                         debug_ss << source_name << ": Scan fused with former values, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                     }
                 }
-                else{
+                else{ //classic method without persistence
                     transformed_scans[source_name]=transformed_scan_local;
                     debug_ss << source_name << ": Scan transformed, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-                }
-
-                //getting last time stamp
-                double last_stamp = TimeToDouble(transformed_scans[source_name]->header.stamp); //we want last timestamp of current scan used
-                if(current_source_latest_stamp < last_stamp){ //update latest source time
-                    current_source_latest_stamp = last_stamp;
                 }
             }
             
             update_stamp();
             debug_ss <<"    |\n    |\n    |\n    V" << "\nStarting FUSION (Global timestamp: " << TimeToDouble(current_global_stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
             
-            //Fusion
+            //Global Fusion
             int fused_scans_nb = 0;
             nav_msgs::msg::Odometry ref_odom = get_estimated_odom(current_source_latest_stamp, odom_msg_list, extrapolate_odometry, false, debug_ss); //odom of newest LaserScan received
             double ref_heading = odom_to_heading(ref_odom);
@@ -265,8 +242,8 @@ public:
                     double tetha_off = sawtooth(ref_heading - source_heading);
                     debug_ss << source_name << ": Data late of (from newest scan): " << current_source_latest_stamp-source_stamp <<  " s, Odometry correction (x,y,tetha): (" << x_off << "," << y_off << "," << tetha_off << ")" << std::endl;
                     transform_360_data(transformed_scans[source_name],-x_off,-y_off,-tetha_off,debug_ss);
-                    transformed_scans[source_name]->header.stamp = current_global_stamp;
-                    //fusion
+                    transformed_scans[source_name]->header.stamp = DoubleToTime(current_source_latest_stamp);
+                    //global fusion
                     fuseScans(resolution_360, fused_scan_360, transformed_scans[source_name]);
                     debug_ss << "   fused_scan <-- " << source_name << " (raw data stamp: " << source_stamp << " s) (corrected data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                     fused_scans_nb ++;
@@ -309,53 +286,52 @@ public:
             fused_scan->header.stamp = DoubleToTime(current_source_latest_stamp); //based on last source stamp rather than global time
 
             // Publish the fused laser scan only if it have been update
-            if(fused_scans_nb>0 && current_source_latest_stamp != prev_source_latest_stamp){
-                publisher_->publish(*fused_scan); 
+            publisher_->publish(*fused_scan); 
+        
+            /*
+            for (const auto& pair1 : transformed_scans) {
+                std::string source_name = pair1.first;
+                transformed_scans[source_name]->header.stamp = current_global_stamp;
+                publisher_->publish(*transformed_scans[source_name]);
+            }
+            */
             
-                /*
-                for (const auto& pair1 : transformed_scans) {
-                    std::string source_name = pair1.first;
-                    transformed_scans[source_name]->header.stamp = current_global_stamp;
-                    publisher_->publish(*transformed_scans[source_name]);
-                }
-                */
-                
-                //debug data
-                int non_zero_vals = 0;
-                int total_vals = fused_scan->ranges.size();
-                if(debug){
-                    for(int i=0; i < total_vals; i++){
-                        if(fused_scan->ranges[i] < INFINITY){
-                            non_zero_vals ++;
-                        }
-                    }
-                }
-                debug_ss << "    |\n    |\n    |\n    V"
-                        << "\nfused_scan published" << " (node time: " << (this->now()).nanoseconds() << "ns)" 
-                        << "\n  Frame: " <<  fused_scan->header.frame_id
-                        << "\n  Timestamp: " <<  std::to_string(TimeToDouble(fused_scan->header.stamp))
-                        << "\n  Number of rays: " << total_vals
-                        << "\n  Number of hit: " << non_zero_vals
-                        << std::endl;
-
-                if(debug && show_ranges){
-                    debug_ss << "Ranges: ";
-                    for(int i=0; i < total_vals; i++){
-                        debug_ss << fused_scan->ranges[i] << " ";
-                    }
-                }
-            }else{
-                debug_ss << "    |\n    |\n    |\n    V"
-                         << "\nNo scan published. (No sources received yet or no source updated its former data)"
-                         << std::endl;
-            }
-
-            //debug
+            //debug data
+            int non_zero_vals = 0;
+            int total_vals = fused_scan->ranges.size();
             if(debug){
-                std::string debug_msg = debug_ss.str();
-                write_debug(debug_file_path, debug_msg);
+                for(int i=0; i < total_vals; i++){
+                    if(fused_scan->ranges[i] < INFINITY){
+                        non_zero_vals ++;
+                    }
+                }
             }
+            debug_ss << "    |\n    |\n    |\n    V"
+                    << "\nfused_scan published" << " (node time: " << (this->now()).nanoseconds() << "ns)" 
+                    << "\n  Frame: " <<  fused_scan->header.frame_id
+                    << "\n  Timestamp: " <<  std::to_string(TimeToDouble(fused_scan->header.stamp))
+                    << "\n  Number of rays: " << total_vals
+                    << "\n  Number of hit: " << non_zero_vals
+                    << std::endl;
+
+            if(debug && show_ranges){
+                debug_ss << "Ranges: ";
+                for(int i=0; i < total_vals; i++){
+                    debug_ss << fused_scan->ranges[i] << " ";
+                }
+            }
+
         }
+        else{
+            debug_ss << "\nNo scan published. (No sources received yet or no source updated its former data)" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+        }
+
+        //debug
+        if(debug){
+            std::string debug_msg = debug_ss.str();
+            write_debug(debug_file_path, debug_msg);
+        }
+
         /*
         catch(const std::exception& e){
             debug_ss << "Error fuseAndPublish: " << e.what() << "\n" << std::endl;
@@ -368,7 +344,7 @@ public:
         */
     }
 
-    void fuseScans(int resolution, sensor_msgs::msg::LaserScan::SharedPtr scan1,sensor_msgs::msg::LaserScan::SharedPtr scan2, bool persistent_mode = false, double min_angle = 0.0, double max_angle = 2*M_PI, std::string source_name = "") {
+    void fuseScans(int resolution, sensor_msgs::msg::LaserScan::SharedPtr scan1,sensor_msgs::msg::LaserScan::SharedPtr scan2, bool persistent_mode = false, std::string source_name = "") {
         //merge scan2 in scan1, they have to be same size.
         //if persistent_mode: the scan2 will override scan1 values when angles are between angle_min and angle_max. scan2 will update scan1 on its visible area.
         //fuse datas
@@ -384,38 +360,23 @@ public:
             }
         }
         else{
-            int start_ind = angle_to_index(min_angle,resolution);
-            int end_ind = angle_to_index(max_angle,resolution);
-            int former_start_ind = start_ind;
-            int former_end_ind = end_ind;
-            if(sources_var[source_name]["persistence_former_start_ind"] != ""){
-                former_start_ind = std::stoi(sources_var[source_name]["persistence_former_start_ind"]);
-                former_end_ind = std::stoi(sources_var[source_name]["persistence_former_end_ind"]);
-            }
             for (int i = 0; i < resolution; ++i) { 
-                //we take the signal of scan2 when we are in its angles bounds
-                /*
-                RCLCPP_INFO(this->get_logger(), "min_angle: %f", rads_to_degrees(min_angle));
-                RCLCPP_INFO(this->get_logger(), "max_angle: %f", rads_to_degrees(max_angle));
-                RCLCPP_INFO(this->get_logger(), "min_index: %d", start_ind);
-                RCLCPP_INFO(this->get_logger(), "max_index: %d", end_ind);
-                */
-                if(consider_val(i,start_ind,end_ind)){
-                    if(consider_val(i,former_start_ind,former_end_ind)){ //point that were already in the area and might have been updated already
-                        if(scan2->ranges[i]<scan1->ranges[i]){
-                            scan1->ranges[i] = scan2->ranges[i];
-                            scan1->intensities[i] = scan2->intensities[i];
-                        }
-                    }
-                    else{
-                        scan1->ranges[i] = scan2->ranges[i];
-                        scan1->intensities[i] = scan2->intensities[i];
-                    }
+                //we use the masks to fuse with the former saved scan and we check for old value to delete
+                double dt_out = std::stod(sources_config[source_name]["timeout_persistence"]);
+                //we should be on 360 scan 
+                if(scan_persist_mask[source_name][i] == 1.0){ //if we sould override the value, we override it
+                    scan1->ranges[i] = scan2->ranges[i];
+                    scan1->intensities[i] = scan2->intensities[i];
+                    scan_persist_time[source_name][i] = TimeToDouble(scan2->header.stamp);
                 }
-                //otherwise we don't change scan1
+                else if((scan_persist_time[source_name][i] < TimeToDouble(scan2->header.stamp)-dt_out) && dt_out != 0.0){ //time of scan2 should be time of the raw scan received in the case if persistence
+                    scan1->ranges[i] = scan2->ranges[i];
+                    scan1->intensities[i] = scan2->intensities[i];
+                    //scan1->ranges[i] = INFINITY;
+                    //scan1->intensities[i] = 0.0;
+                }
+                //otherwise we don't change scan1[i]
             }
-            sources_var[source_name]["persistence_former_start_ind"]=std::to_string(start_ind);
-            sources_var[source_name]["persistence_former_end_ind"]=std::to_string(end_ind);
         }
     }
 
@@ -497,8 +458,6 @@ public:
             sources_var[source_name]["frame"] = "";
             sources_var[source_name]["frame_trans_vector"] = "";
             sources_var[source_name]["frame_rot_vector"] = "";
-            sources_var[source_name]["persistence_former_start_ind"] = "";
-            sources_var[source_name]["persistence_former_end_ind"] = "";
             raw_scan_mutexes[source_name]; //enought to init mutex
         }
     }
@@ -532,13 +491,14 @@ public:
         std::string source_name;
         while (std::getline(stream, source_name, ' ')) {
             this->declare_parameter(source_name+".topic","not_set");
+            this->declare_parameter(source_name+".timeout",0.0);
             this->declare_parameter(source_name+".start_angle",0.0);
             this->declare_parameter(source_name+".end_angle",0.0);
             this->declare_parameter(source_name+".scan_angle_offset",0.0);
             this->declare_parameter(source_name+".range_min",0.0);
             this->declare_parameter(source_name+".range_max",0.0);
             this->declare_parameter(source_name+".persistence",true);
-            this->declare_parameter(source_name+".timeout",0.0);
+            this->declare_parameter(source_name+".timeout_persistence",0.0);
         }
     }
 
@@ -570,13 +530,14 @@ public:
         std::string source_name;
         while (std::getline(stream, source_name, ' ')) {
             sources_config[source_name]["topic"] = this->get_parameter(source_name+".topic").as_string();
+            sources_config[source_name]["timeout"] = this->get_parameter(source_name+".timeout").value_to_string();
             sources_config[source_name]["start_angle"] = this->get_parameter(source_name+".start_angle").value_to_string();
             sources_config[source_name]["end_angle"] = this->get_parameter(source_name+".end_angle").value_to_string();
             sources_config[source_name]["scan_angle_offset"] = this->get_parameter(source_name+".scan_angle_offset").value_to_string();
             sources_config[source_name]["range_min"] = this->get_parameter(source_name+".range_min").value_to_string();
             sources_config[source_name]["range_max"] = this->get_parameter(source_name+".range_max").value_to_string();
             sources_config[source_name]["persistence"] = this->get_parameter(source_name+".persistence").value_to_string();
-            sources_config[source_name]["timeout"] = this->get_parameter(source_name+".timeout").value_to_string();
+            sources_config[source_name]["timeout_persistence"] = this->get_parameter(source_name+".timeout_persistence").value_to_string();
         }
     }
 
@@ -667,6 +628,28 @@ public:
         }
     }
 
+    void init_persist_map(std::string source_name){
+        int n = static_cast<int>(round((2*M_PI)/angle_increment)); //size for 360 scan
+        scan_persist_mask[source_name] = std::vector<double>(n, 0.0);
+        scan_persist_time[source_name] = std::vector<double>(n, 0.0);
+    }
+
+    void update_persist_map(std::string source_name, int raw_reso){
+        //code can be optimized if put that in convert_raw_data_to_360_scan loop directly, but then the functon would be class dependent
+        int final_reso = scan_persist_mask[source_name].size();
+        double data_time = TimeToDouble(transformed_scans[source_name]->header.stamp);
+        for(int i =0; i<raw_reso; i++){
+            //this remap will only be influenced if the source as not an origin of 0.0 and if the angle_increment is different from the wanted final scan
+            int new_i = remap_scan_index(i, raw_scans[source_name]->angle_min, raw_scans[source_name]->angle_max, raw_reso, 0.0, 2*M_PI, final_reso);
+            //new_i is indexes in a 360deg scan with angle_incr and angle start of transformed_scan
+            scan_persist_mask[source_name][new_i] = 0.0; //reset mask
+            if(consider_val(new_i,0,final_reso-1)){
+                scan_persist_mask[source_name][new_i] = 1.0; //update mask
+                scan_persist_time[source_name][new_i] = data_time; //update times for concerned points
+            }
+        }
+    }
+
 private:
     /*
     Fixed variables
@@ -711,7 +694,8 @@ private:
     //scan datas
     std::map<std::string, sensor_msgs::msg::LaserScan::SharedPtr> raw_scans; //raw scans from subscriptions
     std::map<std::string, sensor_msgs::msg::LaserScan::SharedPtr> transformed_scans; //scans after transformations, filters...
-    std::map<std::string, sensor_msgs::msg::LaserScan::SharedPtr> scan_sav; //store saved scans when persistence is on
+    std::map<std::string, std::vector<double>> scan_persist_mask; //0 or 1, used to know what values we should keep from a raw scan for the persistence
+    std::map<std::string, std::vector<double>> scan_persist_time; //used to know the times of a value, allow to delete old ones
     sensor_msgs::msg::LaserScan::SharedPtr fused_scan; //final merged scan
     //clock
     builtin_interfaces::msg::Time simu_timestamp; //used for simuation
@@ -721,8 +705,8 @@ private:
     double prev_source_latest_stamp;
     //odometry
     std::vector<nav_msgs::msg::Odometry> odom_msg_list;
-    nav_msgs::msg::Odometry::SharedPtr odom_msg_former;
-    nav_msgs::msg::Odometry::SharedPtr odom_msg_new;
+    //nav_msgs::msg::Odometry::SharedPtr odom_msg_former;
+    //nav_msgs::msg::Odometry::SharedPtr odom_msg_new;
     //concurrence
     std::mutex mutex_debug_file;
     std::map<std::string, std::mutex> raw_scan_mutexes;
@@ -848,4 +832,49 @@ sensor_msgs::msg::LaserScan transform_360_data(sensor_msgs::msg::LaserScan::Shar
         std::string err_msg = err_ss.str();
         return err_msg;
     }
+
+
+
+    if(odom_msg_new != nullptr){
+        mutex_odom.lock();
+        nav_msgs::msg::Odometry::SharedPtr current_odom(new nav_msgs::msg::Odometry(*odom_msg_new)); //copy data
+        mutex_odom.unlock();
+        if(odom_msg_former != nullptr){ //if we have former odometry, we compute the offset
+            geometry_msgs::msg::Vector3 euler_heading_former = adapt_angle(quaternion_to_euler3D(odom_msg_former->pose.pose.orientation)); //previous heading
+            geometry_msgs::msg::Vector3 euler_heading_new = adapt_angle(quaternion_to_euler3D(current_odom->pose.pose.orientation)); //new heading
+            x_off = current_odom->pose.pose.position.x - odom_msg_former->pose.pose.position.x;
+            y_off = current_odom->pose.pose.position.y - odom_msg_former->pose.pose.position.y;
+            tetha_off = sawtooth(euler_heading_new.z - euler_heading_former.z);
+            //off_set_debug = euler_heading_new.z; //debuging persistence 
+            odom_msg_former = current_odom;
+        }
+        else{ //otherwise we just save odometry for next frame
+            odom_msg_former = current_odom;
+        }
+    }
+    else{
+        debug_ss << source_name << ":Persistence ON, but no Odometry messages received yet on topic '" << odom_topic << "'. Persistence will not work until odometry is received." << std::endl;
+    }
+
+    //START for debuging persistence areas
+    double start_angle_debug = degrees_to_rads(170)-off_set_debug; //angles in map frame
+    double end_angle_debug = degrees_to_rads(190)-off_set_debug;
+    int start_ind_debug = angle_to_index(start_angle_debug,resolution_360); //indexes in scan, so in robot frame
+    int end_ind_debug = angle_to_index(end_angle_debug,resolution_360);
+    debug_ss << "Persitence area: (" << rads_to_degrees(start_angle_debug) << ";" 
+                                    << rads_to_degrees(end_angle_debug) << ";"
+                                    << rads_to_degrees(off_set_debug) << ";"
+                                    << start_ind_debug << ";"
+                                    << end_ind_debug << ")\n[";
+    int hits = 0;
+    for(int y=0;y<transformed_scans[source_name]->ranges.size();y++){
+        if(consider_val(y,start_ind_debug,end_ind_debug)){ 
+            debug_ss << transformed_scans[source_name]->ranges[y] << ";";
+            if(transformed_scans[source_name]->ranges[y] != INFINITY){
+                hits ++;
+            }
+        }
+    }
+    debug_ss << "] \nHITS: "<< hits << std::endl;
+    // debugging END
 */
