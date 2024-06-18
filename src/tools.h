@@ -1,5 +1,5 @@
 /*
-LAST MODIF(DD/MM/YYYY): 14/06/2024
+LAST MODIF(DD/MM/YYYY): 17/06/2024
 */
 
 #include "rclcpp/rclcpp.hpp"
@@ -39,6 +39,7 @@ double TimeToDouble(builtin_interfaces::msg::Time& stamp);
 builtin_interfaces::msg::Time DoubleToTime(double& seconds);
 bool consider_val(int current_ind, int start_ind, int end_ind);
 int angle_to_index(double alpha, int resolution);
+void remap_scan(sensor_msgs::msg::LaserScan::SharedPtr input_scan, sensor_msgs::msg::LaserScan::SharedPtr output_scan, std::vector<double> &mask_to_update);
 int remap_scan_index(int prev_ind, double prev_angle_start, double prev_angle_end, double prev_reso, double new_angle_start, double new_angle_end, double new_reso);
 double sawtooth(double x);
 geometry_msgs::msg::Vector3 quaternion_to_euler3D(geometry_msgs::msg::Quaternion quat);
@@ -54,7 +55,7 @@ geometry_msgs::msg::Vector3 stringToVector3(std::string& str);
 geometry_msgs::msg::Vector3 adapt_angle(geometry_msgs::msg::Vector3 vect);
 double index_to_angle(int ind, int resolution, double elongation = 2 * M_PI);
 
-int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, std::stringstream &debug_ss);
+int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan, std::vector<double> &mask_to_update ,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, std::stringstream &debug_ss);
 void get_pos(double &x, double &y,double alpha,double val,double x_off,double y_off);
 int transform_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan, double off_vect_x,double off_vect_y, double off_tetha, std::stringstream &debug_ss);
 void transform_2D_point(double &result_x, double &result_y,double init_x, double init_y, Eigen::MatrixXd &M1_2);

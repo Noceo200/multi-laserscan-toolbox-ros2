@@ -58,8 +58,6 @@ public:
             rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr subscription_ = this->create_subscription<sensor_msgs::msg::LaserScan>(sources_config[source_name]["topic"], sensor_qos, [this,source_name](const sensor_msgs::msg::LaserScan::SharedPtr msg){ScanCallback(msg,source_name);});
             // Store the subscription in the map if needed for futur handling
             subscriptions_[pair1.first] = subscription_;
-            //initialize the masks for persistence that will be updated after
-            init_scan_masks(source_name); //generated for all sources, even if not used
         }
         //Odometry
         odom_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(odom_topic, sensor_qos, std::bind(&LaserScanToolboxNode::odomCallback, this, std::placeholders::_1));
@@ -116,6 +114,8 @@ public:
                          <<"\n  Translation: "<< sources_var[source_name]["frame_trans_vector"]
                          <<"\n  Euler rotation: "<< sources_var[source_name]["frame_rot_vector"] << std::endl;
                 ready = true;
+                //initialize the masks for persistence that will be updated after
+                init_scan_masks(source_name,angle_increment); //generated for all sources, even if not used
             }
             catch (const std::exception& e) {
                 debug_ss  << source_name << ": Couldn't get transformation " << new_frame << " --> " << sources_var[source_name]["frame"] << std::endl;
@@ -164,64 +164,37 @@ public:
         //compute classical sensors fusion
         if(raw_scans.size() > 0 && current_source_latest_stamp != prev_source_latest_stamp){
             //fusion variables created here because need 'resolution_360' wich is the futur final resolution of the scan considering it as a 360 deg one
+            RCLCPP_INFO(this->get_logger(), "OK0");
             sensor_msgs::msg::LaserScan::SharedPtr fused_scan_360 = new_360_scan(); //the final fused scan can be a non 360 scan, but we first fuse evrything in a 360deg scan
             //the resolution should be same that every other transformed_scans from sources
             int resolution_360 = fused_scan_360->ranges.size();
             debug_ss << std::fixed << "\n\nStarting received scan transformations: Other sources may arrive later" << " (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-
+            RCLCPP_INFO(this->get_logger(), "OK0.1: raw scans: %d",raw_scans.size());
             //Scan transformations and processing according to configurations
             for (const auto& pair1 : raw_scans) { //each raw scan need to be in same format (resolution and 360deg fov) of the fused_scan_360
                 //Get new data
+                RCLCPP_INFO(this->get_logger(), "OK0.2");
                 std::string source_name = pair1.first;
                 raw_scan_mutexes[source_name].lock();
                 sensor_msgs::msg::LaserScan raw_scan = *raw_scans[source_name]; //copy the data
                 raw_scan_mutexes[source_name].unlock();
+                RCLCPP_INFO(this->get_logger(), "OK0.3");
                 sensor_msgs::msg::LaserScan::SharedPtr raw_scan_ptr = std::make_shared<sensor_msgs::msg::LaserScan>(raw_scan);
+                RCLCPP_INFO(this->get_logger(), "OK0.4");
                 //get 360 equivalent filtered and transformed scan
-                sensor_msgs::msg::LaserScan::SharedPtr transformed_scan_local = convert_raw_data_to_360_scan(raw_scan_ptr,scan_360_mask[source_name],new_frame,std::stod(sources_config[source_name]["start_angle"]), std::stod(sources_config[source_name]["end_angle"]),std::stod(sources_config[source_name]["scan_angle_offset"]), std::stod(sources_config[source_name]["range_min"]), std::stod(sources_config[source_name]["range_max"]), stringToVector3(sources_var[source_name]["frame_trans_vector"]), stringToVector3(sources_var[source_name]["frame_rot_vector"]), debug_ss);
+                sensor_msgs::msg::LaserScan::SharedPtr transformed_scan_local = convert_raw_data_to_360_scan(raw_scan_ptr,scan_360_mask[source_name],stringToBool(sources_config[source_name]["persistence"]),raw_scans_persist[source_name],new_frame,std::stod(sources_config[source_name]["start_angle"]), std::stod(sources_config[source_name]["end_angle"]),std::stod(sources_config[source_name]["scan_angle_offset"]), std::stod(sources_config[source_name]["range_min"]), std::stod(sources_config[source_name]["range_max"]), stringToVector3(sources_var[source_name]["frame_trans_vector"]), stringToVector3(sources_var[source_name]["frame_rot_vector"]), debug_ss, source_name);
                 transformed_scan_local->header.stamp = raw_scan_ptr->header.stamp;
-                //merge this new data with former saved scan if persitence ON 
-                if(stringToBool(sources_config[source_name]["persistence"])){
-                    if(transformed_scans[source_name] == nullptr){ 
-                        //We initialize the saved scan for the first time
-                        transformed_scans[source_name]=transformed_scan_local;
-                        debug_ss << source_name << ": Persistence ON, scan saved for fusion with future values, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-                    }
-                    else{
-                        //we transform the former scan values according to how the bot moved between the 2 measures
-                        //we get odometry difference
-                        debug_ss << source_name << ": Persistence ON, getting different odometries (last and new)..." << std::endl;
-                        nav_msgs::msg::Odometry last_odom = get_estimated_odom(TimeToDouble(transformed_scans[source_name]->header.stamp), odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
-                        nav_msgs::msg::Odometry new_odom = get_estimated_odom(TimeToDouble(transformed_scan_local->header.stamp), odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
-                        double x_off = new_odom.pose.pose.position.x - last_odom.pose.pose.position.x;
-                        double y_off = new_odom.pose.pose.position.y - last_odom.pose.pose.position.y;
-                        double last_heading = odom_to_heading(last_odom);
-                        double new_heading = odom_to_heading(new_odom);
-                        double tetha_off = sawtooth(new_heading - last_heading);
-                        if(x_off != 0.0 || y_off != 0.0 || tetha_off != 0.0 ){
-                            transform_360_data(transformed_scans[source_name],-x_off,-y_off,-tetha_off,debug_ss);
-                            //filter_360_data(transformed_scans[source_name],0.0, 2*M_PI, 0.0, std::stod(sources_config[source_name]["range_min"]), std::stod(sources_config[source_name]["range_max"]), debug_ss);
-                            debug_ss << source_name << ": Persistence ON, motion detected, Former Scan adjusted. (x,y,tetha) offset: (" << x_off << "," << y_off << "," << tetha_off << ") m, rad " << std::endl;
-                        }
-                        //the data is now at the time of the new received one
-                        transformed_scans[source_name]->header.stamp = transformed_scan_local->header.stamp;
-                        //we update the masks according to the scan, only the time mask need to be updated
-                        update_time_mask(scan_360_mask[source_name],resolution_360,scan_360_times[source_name],TimeToDouble(transformed_scans[source_name]->header.stamp)); 
-                        //we fuse the scan with the former values, the new scan will update the former values only on its FOV equivalence on a 360 deg scan.
-                        //local fusion
-                        fuseScans(resolution_360,transformed_scans[source_name], transformed_scan_local, true, source_name);
-                        debug_ss << source_name << ": Scan fused with former values, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-                    }
-                }
-                else{ //classic method without persistence
-                    transformed_scans[source_name]=transformed_scan_local;
-                    debug_ss << source_name << ": Scan transformed, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
-                }
+                transformed_scans[source_name]=transformed_scan_local;
+                debug_ss << source_name << ": Scan transformed, ready for global fusion..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                RCLCPP_INFO(this->get_logger(), "OK7");
             }
             
+            RCLCPP_INFO(this->get_logger(), "OK7.1");
             update_stamp();
+            RCLCPP_INFO(this->get_logger(), "OK7.2");
             debug_ss <<"    |\n    |\n    |\n    V" << "\nStarting FUSION (Global timestamp: " << TimeToDouble(current_global_stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
             
+            RCLCPP_INFO(this->get_logger(), "OK8");
             //Global Fusion
             nav_msgs::msg::Odometry ref_odom = get_estimated_odom(current_source_latest_stamp, odom_msg_list, extrapolate_odometry, false, debug_ss); //odom of newest LaserScan received
             double ref_heading = odom_to_heading(ref_odom);
@@ -247,6 +220,7 @@ public:
                     debug_ss << "fused_scan xxx " << source_name << " exceed its timeout value of " << dt_out << "s" << " (data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
                 }
             }
+            RCLCPP_INFO(this->get_logger(), "OK9");
 
             //get last time
             update_stamp();
@@ -362,7 +336,7 @@ public:
                 //we use the masks to fuse with the former saved scan and we check for old value to delete
                 double dt_out = std::stod(sources_config[source_name]["timeout_persistence"]);
                 //we should be on 360 scan 
-                if(scan_360_mask[source_name][i] == 1.0){ //if we sould override the value, we override it
+                if(scan_360_mask[source_name][i] == 1.0){ //if we should override the value, we override it
                     scan1->ranges[i] = scan2->ranges[i];
                     scan1->intensities[i] = scan2->intensities[i];
                     scan_360_times[source_name][i] = TimeToDouble(scan2->header.stamp);
@@ -587,32 +561,91 @@ public:
         }
     }
 
-    sensor_msgs::msg::LaserScan::SharedPtr convert_raw_data_to_360_scan(sensor_msgs::msg::LaserScan::SharedPtr laser_raw, std::vector<double> &mask_360,std::string new_frame,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, geometry_msgs::msg::Vector3 vector_newframe, geometry_msgs::msg::Vector3 rotate_newframe, std::stringstream &debug_ss){
+    sensor_msgs::msg::LaserScan::SharedPtr convert_raw_data_to_360_scan(sensor_msgs::msg::LaserScan::SharedPtr laser_raw, std::vector<double> &mask_raw_filtered_360, bool persistence, sensor_msgs::msg::LaserScan::SharedPtr laser_raw_filtered_persist, std::string new_frame,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, geometry_msgs::msg::Vector3 vector_newframe, geometry_msgs::msg::Vector3 rotate_newframe, std::stringstream &debug_ss, std::string source_name){
         if (laser_raw != nullptr){
             //Configure scan into same format that the final one
             sensor_msgs::msg::LaserScan::SharedPtr transformed_scan = new_360_scan();
-            //transformed_scan->header.frame_id =  laser_raw->header.frame_id;
             //remap points to match the new resolutions and have a 360 circle
-            int prev_reso = laser_raw->ranges.size();
-            int new_reso = transformed_scan->ranges.size();
-            for(int i =0; i<laser_raw->ranges.size(); i++){
-                //this remap will only be influenced if the source as not an origin of 0.0 and if the angle_increment is different from the wanted final scan
-                int new_i = remap_scan_index(i, laser_raw->angle_min, laser_raw->angle_max, prev_reso, transformed_scan->angle_min, transformed_scan->angle_max, new_reso);
-                //new_i is indexes in a 360deg scan with angle_incr and angle start of transformed_scan
-                if(consider_val(new_i,0,new_reso-1)){
-                    if(laser_raw->ranges[i]<transformed_scan->ranges[new_i]){
-                        transformed_scan->ranges[new_i] = laser_raw->ranges[i];
-                        transformed_scan->intensities[new_i] = laser_raw->intensities[i];
-                    }
+            //this remap will only be influenced if the source as not an origin of 0.0 and if the angle_increment is different from the wanted final scan
+
+            remap_scan(laser_raw,transformed_scan,mask_raw_filtered_360);
+
+            //filter data we want to keep
+            filter_360_data(transformed_scan, mask_raw_filtered_360, start_angle, end_angle, angle_origin_offset, min_range, max_range, debug_ss); //cut, crop data according to wanted angle for this source + add offset
+
+            //DEBUG Mask START
+            int count1 = 0;
+            debug_ss << "\nMASK DEBUG after filter: [";
+            for(int i =0; i<mask_raw_filtered_360.size() ;i++){
+                debug_ss << int(round(mask_raw_filtered_360[i])) << ";"; 
+                if(mask_raw_filtered_360[i]==1.0){
+                    count1 ++;
                 }
             }
-            //debug_ss << "\nDEBUG_PERSO: total_Hits final: " << count << std::endl;
-            //filter data we want to keep
-            filter_360_data(transformed_scan,start_angle, end_angle, angle_origin_offset, min_range, max_range, debug_ss); //cut, crop data according to wanted angle for this source + add offset
+            debug_ss << "]\n " << count1 << std::endl;
+            //DEBUG Mask END
+
+            RCLCPP_INFO(this->get_logger(), "OK1");
+
+            RCLCPP_INFO(this->get_logger(), "OK2");
+            //If persistence, we fuse the not transformed datas
+            if(persistence){
+                builtin_interfaces::msg::Time new_raw_time = laser_raw->header.stamp; //we can not use transformed_scan header yet as its time is not updated here yet
+                //local fusion
+                if(laser_raw_filtered_persist == nullptr){ 
+                    //We initialize the saved scan for the first time
+                    RCLCPP_INFO(this->get_logger(), "OK3");
+                    raw_scans_persist[source_name] = new_360_scan(); //we initialize directly with source_name, otherwise it wouldn't works
+                    RCLCPP_INFO(this->get_logger(), "OK3.1");
+                    copy_ranges(raw_scans_persist[source_name], transformed_scan);
+                    RCLCPP_INFO(this->get_logger(), "OK3.2: len raw_scans_persist[source_name]: %d",raw_scans_persist[source_name]->ranges.size());
+                    raw_scans_persist[source_name]->header.stamp = new_raw_time;
+                    RCLCPP_INFO(this->get_logger(), "OK3.3");
+                    debug_ss << source_name << ": Persistence ON, raw filtered scan saved in 360 persistent raw scan for fusion with future raw filtered values, ready for transformation..." << "(raw filtered data stamp: " << TimeToDouble(raw_scans_persist[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                    RCLCPP_INFO(this->get_logger(), "OK3.4");
+                }
+                else{
+                    RCLCPP_INFO(this->get_logger(), "OK4");
+                    //we transform the former scan values according to how the bot moved between the 2 measures
+                    //we get odometry difference
+                    debug_ss << source_name << ": Persistence ON, getting odometries for older 360 persistent raw scan and new raw filtered values..." << std::endl;
+                    nav_msgs::msg::Odometry last_odom = get_estimated_odom(TimeToDouble(laser_raw_filtered_persist->header.stamp), odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
+                    nav_msgs::msg::Odometry new_odom = get_estimated_odom(TimeToDouble(new_raw_time), odom_msg_list, extrapolate_odometry, show_odometry_detail, debug_ss);
+                    double x_off = new_odom.pose.pose.position.x - last_odom.pose.pose.position.x;
+                    double y_off = new_odom.pose.pose.position.y - last_odom.pose.pose.position.y;
+                    double last_heading = odom_to_heading(last_odom);
+                    double new_heading = odom_to_heading(new_odom);
+                    double tetha_off = sawtooth(new_heading - last_heading);
+                    RCLCPP_INFO(this->get_logger(), "OK4.1");
+                    if(x_off != 0.0 || y_off != 0.0 || tetha_off != 0.0 ){
+                        RCLCPP_INFO(this->get_logger(), "OK4.1.2");
+                        transform_360_data(laser_raw_filtered_persist,-x_off,-y_off,-tetha_off,debug_ss);
+                        RCLCPP_INFO(this->get_logger(), "OK4.1.3");
+                        debug_ss << source_name << ": Persistence ON, motion detected, Former 360 persistent raw scan adjusted. (x,y,tetha) offset: (" << x_off << "," << y_off << "," << tetha_off << ") m, rad " << std::endl;
+                    }
+                    //the data is now at the time of the new received one
+                    laser_raw_filtered_persist->header.stamp = new_raw_time;
+                    //we update the masks according to the scan, only the time mask need to be updated
+                    //TDM update_time_mask(scan_360_mask[source_name],resolution_360,scan_360_times[source_name],TimeToDouble(transformed_scans[source_name]->header.stamp)); 
+                    //we fuse the scan with the former values, the new scan will update the former values only on its FOV equivalence on a 360 deg scan.
+                    //local fusion
+                    fuseScans(laser_raw_filtered_persist->ranges.size(),laser_raw_filtered_persist, transformed_scan, true, source_name);
+                    RCLCPP_INFO(this->get_logger(), "OK4.2");
+                    //we copy data in transformed_scan
+                    copy_ranges(transformed_scan, laser_raw_filtered_persist);
+                    RCLCPP_INFO(this->get_logger(), "OK4.3");
+                    debug_ss << source_name << ": Raw filtered Scan fused with 360 persistent raw scan, ready for transformation..." << "(data stamp: " << TimeToDouble(transformed_scans[source_name]->header.stamp) << " s) (node time: " << (this->now()).nanoseconds() << "ns)" << std::endl;
+                }
+            }
+
+            RCLCPP_INFO(this->get_logger(), "OK5");
+
             //compute new points in the wanted ouput frame
             transform_360_data(transformed_scan,vector_newframe.x,vector_newframe.y,rotate_newframe.z,debug_ss); //compute new points in output frame
+            
+            RCLCPP_INFO(this->get_logger(), "OK6");
+
             //compute the mask in a 360 final scan, using existing other function is too anoying as they are in tools.cpp 
-            update_360_mask(mask_360, new_reso, prev_reso, start_angle, end_angle, angle_origin_offset,vector_newframe.x,vector_newframe.y,rotate_newframe.z); 
             return transformed_scan;
         }
         else{
@@ -629,8 +662,8 @@ public:
         }
     }
 
-    void init_scan_masks(std::string source_name){
-        int n = static_cast<int>(round((2*M_PI)/angle_increment)); //size that would have a 360 final scan
+    void init_scan_masks(std::string source_name, double increment){
+        int n = static_cast<int>(round((2*M_PI)/increment)); //size that would have a 360 scan of this source
         scan_360_mask[source_name] = std::vector<double>(n, 0.0);
         scan_360_times[source_name] = std::vector<double>(n, 0.0);
     }
@@ -641,79 +674,6 @@ public:
                 mask_360_time_to_update[i] = data_time;
             }
         }
-    }
-
-    void update_360_mask(std::vector<double> &mask_to_update, int reso, int former_reso, double start_angle, double end_angle, double angle_origin_offset, double off_vect_x, double off_vect_y, double off_tetha){
-        //this is just a simple version of filter_360 and transform_360, but it computes only the start and end points and then fill with 1 values according to the resolution between the interval.
-        //new start_angles and end_angles before transformation. (we don't mind about ranges)
-        double new_start_angle = start_angle+angle_origin_offset;
-        double new_end_angle = end_angle+angle_origin_offset;
-
-        //transformation matrix
-        //let's be sure to manipulate angles from 0 to 2pi
-        if (off_tetha<0){
-            off_tetha=2*M_PI+off_tetha;
-        }
-        if (off_tetha == 2*M_PI){
-            off_tetha=0;
-        }
-        //translation in homogeneous coordinates
-        Eigen::MatrixXd T = Eigen::MatrixXd::Identity(4, 4);
-        T(0,3) = off_vect_x;
-        T(1,3) = off_vect_y;
-        //rotation in homogeneous coordinates
-        Eigen::MatrixXd R = Eigen::MatrixXd::Identity(4, 4);
-        R(0,0) = cos(off_tetha);
-        R(0,1) = -sin(off_tetha);
-        R(1,0) = sin(off_tetha);
-        R(1,1) = cos(off_tetha);
-        //final homogeneous transformation, M1_2 = pass matrix, displacement from new_frame to sensor_frame
-        Eigen::MatrixXd M1_2(4, 4);
-        M1_2 = T*R;
-
-        //transformation of start point and end point
-        double init_x_start = 0;
-        double init_y_start = 0;
-        double new_x_start = 0.0;
-        double new_y_start = 0.0;
-        double init_x_end = 0;
-        double init_y_end = 0;
-        double new_x_end = 0.0;
-        double new_y_end = 0.0;
-        get_pos(init_x_start, init_y_start,new_start_angle,1.0,0.0,0.0); //we don't mind about the range, the angle will be the same
-        get_pos(init_x_end, init_y_end,new_end_angle,1.0,0.0,0.0); //we don't mind about the range, the angle will be the same
-        transform_2D_point(new_x_start, new_y_start,init_x_start,init_y_start,M1_2);
-        transform_2D_point(new_x_end, new_y_end,init_x_end,init_y_end,M1_2);
-        new_start_angle = atan2(new_y_start,new_x_start);
-        new_end_angle = atan2(new_y_end,new_x_end);
-        if (new_start_angle<0){
-            new_start_angle=2*M_PI+new_start_angle;
-        }
-        if (new_end_angle<0){
-            new_end_angle=2*M_PI+new_end_angle;
-        }
-
-        //now we can put 1 values between new_start_angle and new_end_angle indexes
-        double index_start = angle_to_index(new_start_angle,reso);
-        double index_end = angle_to_index(new_end_angle,reso);
-        //int step = std::max(1,static_cast<int>(round(reso/former_reso)));
-
-        //TDM reso is not yet taken into considerations, so unwanted inf values might be applied.
-        //TDM Persistence to be deleted
-
-        for(int i =0; i<reso; i++){
-            //same values might be given several times if former_reso < reso so it will add spaces, other wise it should fill everything
-            if(consider_val(i,index_start,index_end)){
-                //reso diff management
-                //new_i = static_cast<int>(round((former_reso/reso)*i)); //will have an impact only if 
-                mask_to_update[i] = 1.0; 
-            }
-            else{
-                mask_to_update[i] = 0.0;
-            }
-        }
-
-
     }
 
 private:
@@ -761,6 +721,7 @@ private:
     //scan datas
     std::map<std::string, sensor_msgs::msg::LaserScan::SharedPtr> raw_scans; //raw scans from subscriptions
     std::map<std::string, sensor_msgs::msg::LaserScan::SharedPtr> transformed_scans; //scans after transformations, filters...
+    std::map<std::string, sensor_msgs::msg::LaserScan::SharedPtr> raw_scans_persist; //scans for persistence
     std::map<std::string, std::vector<double>> scan_360_mask; //0 or 1, used to know what values we should keep from a raw scan on a 360 scan with final resolution, used for the persistence
     std::map<std::string, std::vector<double>> scan_360_times; //used to know the last times a value have been updated in a final 360 scan, allow to delete old ones, used for persistence aging
     sensor_msgs::msg::LaserScan::SharedPtr fused_scan; //final merged scan

@@ -1,5 +1,5 @@
 /*
-LAST MODIF(DD/MM/YYYY): 14/06/2024
+LAST MODIF(DD/MM/YYYY): 17/06/2024
 */
 
 #include "rclcpp/rclcpp.hpp"
@@ -401,7 +401,7 @@ double degrees_to_rads(double degrees){
     return degrees*M_PI/180;
 }
 
-int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, std::stringstream &debug_ss){
+int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan, std::vector<double> &mask_to_update ,double start_angle, double end_angle, double angle_origin_offset, double min_range, double max_range, std::stringstream &debug_ss){
     /*
     Receive a to_transform_scan of a 360 scan only, the shift will not work if the scan message is not a 360 one.
     */    
@@ -410,20 +410,24 @@ int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,dou
     //we shift all the values to bring back the origin angle to the x axis
     int index_shift = angle_to_index(angle_origin_offset,resolution); //index which is the first angle for the lidar
     sensor_msgs::msg::LaserScan::SharedPtr shifted_scan = std::make_shared<sensor_msgs::msg::LaserScan>();
+    std::vector<double> shifted_mask;
     shifted_scan->ranges.clear();
     for (int i = 0; i < resolution; ++i) { 
         if(i+index_shift < resolution){ 
             shifted_scan->ranges.push_back(to_transform_scan->ranges[i+index_shift]);
             shifted_scan->intensities.push_back(to_transform_scan->intensities[i+index_shift]);
+            shifted_mask.push_back(mask_to_update[i+index_shift]);
         }
         else{
             shifted_scan->ranges.push_back(to_transform_scan->ranges[i+index_shift-resolution]);
             shifted_scan->intensities.push_back(to_transform_scan->intensities[i+index_shift-resolution]);
+            shifted_mask.push_back(mask_to_update[i+index_shift-resolution]);
         }
     }
 
     //we keep the wanted angles
-    sensor_msgs::msg::LaserScan::SharedPtr filtered_scan = std::make_shared<sensor_msgs::msg::LaserScan>();;
+    sensor_msgs::msg::LaserScan::SharedPtr filtered_scan = std::make_shared<sensor_msgs::msg::LaserScan>();
+    std::vector<double> filtered_mask;
     filtered_scan->ranges.clear();
 
     //compute index to consider according to min/max angles wanted
@@ -441,9 +445,21 @@ int filter_360_data(sensor_msgs::msg::LaserScan::SharedPtr to_transform_scan,dou
             filtered_scan->ranges.push_back(INFINITY);
             filtered_scan->intensities.push_back(0.0);
         }
+        //mask generation
+        if(consider_val(i, start_index, end_index)){
+            filtered_mask.push_back(shifted_mask[i]);
+        }
+        else{
+            filtered_mask.push_back(0.0);
+        }
     }
 
     //copy result ranges into to_transform_scan
+    //mask
+    for(int i = 0; i < resolution; ++i){
+        mask_to_update[i] = filtered_mask[i];
+    }
+    //laser_scan
     if(copy_ranges(to_transform_scan,filtered_scan)){ 
         return 1;
     } 
@@ -879,6 +895,32 @@ int angle_to_index(double alpha, int resolution){
 
 double index_to_angle(int ind, int resolution, double elongation){ //default elongation to 2*PI, see function signature
     return (ind*elongation)/resolution;
+}
+
+void remap_scan(sensor_msgs::msg::LaserScan::SharedPtr input_scan, sensor_msgs::msg::LaserScan::SharedPtr output_scan, std::vector<double> &mask_to_update){
+    int prev_reso = input_scan->ranges.size();
+    double prev_angle_start = input_scan->angle_min;
+    double prev_angle_end = input_scan->angle_max;
+    int new_reso = output_scan->ranges.size();
+    double new_angle_start = output_scan->angle_min;
+    double new_angle_end = output_scan->angle_max;
+    for(int i =0; i<prev_reso; i++){
+        //this remap will only be influenced if the source as not an origin of 0.0 and if the angle_increment is different from the wanted final scan
+        int new_i = remap_scan_index(i, prev_angle_start, prev_angle_end, prev_reso, new_angle_start, new_angle_end, new_reso);
+        //new_i is indexes in a 360deg scan with angle_incr and angle start of output_scan
+        if(consider_val(new_i,0,new_reso-1)){
+            if(input_scan->ranges[i]<output_scan->ranges[new_i]){
+                output_scan->ranges[new_i] = input_scan->ranges[i];
+                output_scan->intensities[new_i] = input_scan->intensities[i];
+            }
+            mask_to_update[new_i] = 1.0;
+        }
+        else{
+            if(new_i < new_reso){ //otherwise if mask_to_udate is smaller, the index will be out of bounds 
+                mask_to_update[new_i] = 0.0;
+            }
+        }
+    }
 }
 
 int remap_scan_index(int prev_ind, double prev_angle_start, double prev_angle_end, double prev_reso, double new_angle_start, double new_angle_end, double new_reso){
