@@ -1,51 +1,79 @@
 laserscan_toolbox_node:
   ros__parameters:
     #common
-    rate: 20.0 #hz
+    rate: 40.0 #hz
     topic_out: "scan" 
     new_frame: "base_link"
-    odom_topic: "odom_simu" #Used for correct merging unsynchronised sources and for persistence feature
+    odom_topic: "odom_simu" #USed by persistence feature and to synchronise scans
     odom_delay_limit: 3.0 #s, time of odometries to keep in memory, 0.0 = keep only last received odometry
-    extrapolate_odometry: true #define if the program should extrapolate the odometry when the wanted stamp of a LaserScan is after the newest received odometry.
+    extrapolate_odometry: false #define if the program should extrapolate the odometry when the wanted stamp of a LaserScan is after the newest received odometry.
 
     #debugging
     debug: false
     debug_file_path: "lasertoolbox_debug.txt"
     show_ranges: false
-    show_odometry_detail: false
+    show_odometry_detail: true
 
     #output settings
-    angle_min: 0.0
-    angle_max: 6.283185307
-    angle_increment: 0.017453293 #0.017453293 for 360 values resolution
+    angle_min: 0.0 #0.0
+    angle_max: 6.283185307 #6.283185307
+    angle_increment: 0.004363323 #0.069 #0.27925268 #0.004363323 #0.008726647 #0.017453293 for 360 values resolution = 1deg precision
     range_min: 0.0 #m
-    range_max: 100.0 #m
+    range_max: 12.0 #m
+    extrapolate_scan: false #If true, the scan merger will try to respect the "rate" by updating the scan according to the new received odometry even if the sensors didn't update new datas, otherwise, the merge will just update the merged scan when it receive new datas from one of the sensor.
 
     #advanced output settings
-    auto_set: true #If true, the seetings below will be set automatically using the first source
+    auto_set: true #If true, the settings below will be set automatically using the first source
     time_increment: 0.0 #s
     scan_time: 0.0 #s
 
     #sources
-    sources: s1 s2 s3 #choose the names you want
+    sources: s1 s2 s3 s4
 
-    s1: #name of the source you want to set
-      topic: "scan1" #topic to subscribed for the LaserScan message
-      start_angle: 0.0 #Crop the datas 
-      end_angle: 6.283185307 #Crop the datas
-      scan_angle_offset: 0.0 #If there is an offset between your frame angle origin (x axis) and your sensor.
-      range_min: 0.0 #m, #Crop the datas 
-      range_max: 100.0 #m, #Crop the datas 
-      persistence: false
+    s1:
+      topic: "lidar1/scan"
       timeout: 0.0 #0.0 seconds = all value's date are autorized
+      start_angle: 1.570796327 #represent 45 deg in source frame
+      end_angle: 3.141592654 #represent -45 = 315 deg in source frame
+      scan_angle_offset: 0.0 #180 deg with rpLidars, but angles are well specified
+      range_min: 0.0 #m
+      range_max: 100.0 #m
+
+      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
+      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
 
     s2:
-      topic: "scan2"
-      start_angle: 0.0
-      end_angle: 6.283185307
+      topic: "lidar2/scan"
+      timeout: 0.0 #0.0 seconds = all value's date are autorized
+      start_angle:  0.785398163 #1.570796327 #0.785398163 #45 deg
+      end_angle: 5.497787144 #3.141592654 #5.497787144 #-45 = 315 deg
+      scan_angle_offset: 0.0 #180 deg with rpLidars, but angles are well specified
+      range_min: 0.0 #m
+      range_max: 100.0 #m
+
+      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
+      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
 
     s3:
-      topic: "scan3"
-      start_angle: 0.0
-      end_angle: 6.283185307
+      topic: "cam1/scan"
+      timeout: 0.0 #0.0 seconds = all value's date are autorized
+      start_angle: -0.20 #0.785398163, the values are already specified in scan msg, but needed to specify those ones for persistence feature
+      end_angle: 0.20
       scan_angle_offset: 0.0
+      range_min: 0.0 #m
+      range_max: 100.0 #m
+
+      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
+      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
+
+    s4:
+      topic: "cam2/scan"
+      timeout: 0.0  
+      start_angle: 2.356194491 
+      end_angle: 3.926990817
+      scan_angle_offset: 0.0
+      range_min: 0.0 #m
+      range_max: 100.0 #m
+
+      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
+      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
