@@ -30,15 +30,15 @@ It does not aim to replace existing methods for 2D mapping and navigation but ra
 ## Dependencies
 * ROS2 (Tested on Humble): https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
 
-### Packages needed
-
-The following ros2 packages should be available:
+The following ROS2 packages are used and should be available once ROS2 is installed:
 * ament_cmake
 * rclcpp
 * sensor_msgs
 * tf2
 * tf2_ros
 * tf2_geometry_msgs
+* rosgraph_msgs
+* nav_msgs
 
 If needed, install the missing ones:
 ```
@@ -47,43 +47,62 @@ sudo apt-get install ros-<ros_version>-<PACKAGE_name>
 
 ## Installation
 
-Install:
-'laser_scan_merger' is a package only tested on <br>ros2 humble</br>.
 ```
 cd <your_ros2_workspace>/src/
-git clone https://github.com/Noceo200/laser_scan_merger.git
+git clone https://github.com/Noceo200/multi-laserscan-toolbox-ros2.git
 cd ..
 colcon build
 ```
 
-## Edit behavior of the scan merger
+## API
 
-Open 'laser_scan_merger/config/params.yaml':
+### Subscribed topics
+
+| Topic  | Type | Description | 
+|-----|----|----|
+| /scan1  | `sensor_msgs/LaserScan` | The specified Laser-Scan input from your sensor 1 | 
+| /scan2  | `sensor_msgs/LaserScan` | The specified Laser-Scan input from your sensor 2 | 
+| /scan_i...  | `sensor_msgs/LaserScan` | An unrestricted amount of inputs can be specified | 
+| /odom  | `nav_msgs/Odometry` | The odometry of your robot is used to ensure a consistent fusion | 
+| **tf** | N/A | A valid transform from your configured frames and those attached to the Laser-Scan messages inputs |
+
+### Published topics
+
+| Topic  | Type | Description | 
+|-----|----|----|
+| /scan  | `sensor_msgs/LaserScan` | Output merged Unified Laser-Scan at a virtual specified frame | 
+
+## Configuration
+
+### Merger Params
+
+`mode` - "mapping" or "localization" mode for performance optimizations in the Ceres problem creation
+
+`mode` - "mapping" or "localization" mode for performance optimizations in the Ceres problem creation
+
+### Inputs Params
+
+Those configurations can be specified for each inputs.
+
+`odom_frame` - Odometry frame
+
+`map_frame` - Map frame
+
+`base_frame` - Base frame
+
+## Launch
+Two parameters can be specified when launching the package.
+
+`use_sim_time` - If True, the package will subscribed to `/clock` and use this time to synchronise and publish the Laser-Scan messages. Otherwise, the system's clock will be used.
+
+`params_file` - YAML file tu consider for the configurations.
+
+To launch with the default configurations in "config/laserscan_toolbox_params.yaml":
 ```
-laser_scan_merger_node:
-  ros__parameters:
-    lidar1_start_angle : 4.71238898 #270 deg
-    lidar1_end_angle : 3.141592654 #180 deg
-    lidar2_start_angle : 1.570796327 #90 deg
-    lidar2_end_angle : 6.283185307 #360 deg
-    topic_lid1 : "lidar1_scan" #Topic to subscribe for Lidar1's LaserScan
-    topic_lid2 : "lidar2_scan" #Topic to subscribe for Lidar2's LaserScan
-    topic_out : "scan" #Output Topic
-    new_frame : "base2_link" #Frame to use for the new virtual Lidar created
+ros2 launch multi-laserscan-toolbox-ros2 laserscan_toolbox.launch.py use_sim_time:=<true/false>
 ```
 
-Rebuild:
+To launch with your own configurations:
 ```
-colcon build
-```
-
-#### Launch Scan merger
-To launch with yaml parameters:
-```
-ros2 launch laser_scan_merger launch.py
-```
-
-To launch with default parameters:
-```
-ros2 run laser_scan_merger laser_scan_merger_node
+ros2 launch multi-laserscan-toolbox-ros2 laserscan_toolbox.launch.py params_file:=<your_yaml_file_path> use_sim_time:=<true/false>
 ```
