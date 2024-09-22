@@ -1,19 +1,20 @@
 # multi-laserscan-toolbox-ros2
-The package 'laser_scan_merger' allow to merge 2 LaserScan messages in one. 
+This ROS2 package provides a lightweight and modular solution for fusing sensor data from an unrestricted amount of sensors' inputs formatted as Laser-Scans, enabling efficient and accurate 2D navigation or mapping while considering 3D obstacles.
+Any robot can easily plug and play this package into their current mapping, or navigation, system using several different sensors.
+Our method focuses on merging data from multiple sensors, such as LiDARs, cameras, and ultrasonic sensors, into a unified Laser-Scan, which serves as a foundation for faster and more lightweight navigation. 
 
-Transformations theory:
-http://miageprojet2.unice.fr/@api/deki/files/3019/=1_-_TransformationsGeometriques.pdf
+By fusing sensor data at the Laser-Scan level, our approach enables the use of basic 2D Simultaneous Localization And Mapping (SLAM) algorithms for mapping tasks, or any others Laser-Scan based features, while still benefiting from the rich information provided by multimodal 3D inputs.
+This results in a more computationally efficient solution compared to traditional 3D methods that rely on depth points or full multimodal SLAM systems. 
+It does not aim to replace existing methods for 2D mapping and navigation but rather seeks to enhance them by reducing their computational load and integrating data from multiple 3D and 2D sensors.
 
-## To-DO
-- new name: Multi_laserscan_toolbox
-- Merge list of laser scans + output list of wanted virtual lidars (Better if on robot that are lidars, to avoid fake informations if placed somewhere where the closest points are not detected)
-- Possibility to do multi mapping, (use slam_toolbox, merge maps), or created multi lidars SLAM. (Autre Git?)
+<video width="430" height="240" controls>
+  <source src="materials/A Lightweight Approach to Efficient Multimodal 2D Navigation and Mapping Unified LaserScans as an Alternative to 3D Methods_uncompressed.mp4" type="video/mp4">
+</video>
 
-### Limitations
-Some informations are lost when converting multiple LaserScans to one.
+[Related Paper](materials/A_Lightweight_Approach_to_Efficient_Multimodal_2D_Navigation_and_Mapping_Unified_LaserScans_as_an_Alternative_to_3D_Methods.pdf)
 
 ## Dependencies
-* ros2 humble (not tested on other versions)
+* ROS2 (Tested on Humble): https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
 
 ### Packages needed
 
