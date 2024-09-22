@@ -7,11 +7,13 @@ By fusing sensor data at the Laser-Scan level, our approach enables the use of b
 This results in a more computationally efficient solution compared to traditional 3D methods that rely on depth points or full multimodal SLAM systems. 
 It does not aim to replace existing methods for 2D mapping and navigation but rather seeks to enhance them by reducing their computational load and integrating data from multiple 3D and 2D sensors.
 
-<video width="430" height="240" controls>
-  <source src="materials/A Lightweight Approach to Efficient Multimodal 2D Navigation and Mapping Unified LaserScans as an Alternative to 3D Methods_uncompressed.mp4" type="video/mp4">
-</video>
-
-[Related Paper](materials/A_Lightweight_Approach_to_Efficient_Multimodal_2D_Navigation_and_Mapping_Unified_LaserScans_as_an_Alternative_to_3D_Methods.pdf)
+<div style="text-align: center;">
+  <video width="430" height="240" controls>
+    <source src="materials/A Lightweight Approach to Efficient Multimodal 2D Navigation and Mapping Unified LaserScans as an Alternative to 3D Methods_uncompressed.mp4" type="video/mp4">
+  </video>
+  <br>
+  <a href="materials/A_Lightweight_Approach_to_Efficient_Multimodal_2D_Navigation_and_Mapping_Unified_LaserScans_as_an_Alternative_to_3D_Methods.pdf">Related Paper</a>
+</div>
 
 ## Dependencies
 * ROS2 (Tested on Humble): https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
