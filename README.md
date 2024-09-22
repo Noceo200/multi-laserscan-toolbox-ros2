@@ -9,10 +9,14 @@ It does not aim to replace existing methods for 2D mapping and navigation but ra
 
 <table align="center">
   <tr>
+    <td align="center">
+      <a href="materials/A Lightweight Approach to Efficient Multimodal 2D Navigation and Mapping Unified LaserScans as an Alternative to 3D Methods_uncompressed.mp4">Related Video</a>
+    </td>
+  </tr>
+  <tr>
     <td>
       <video width="430" height="240" controls>
         <source src="materials/A Lightweight Approach to Efficient Multimodal 2D Navigation and Mapping Unified LaserScans as an Alternative to 3D Methods_uncompressed.mp4" type="video/mp4">
-        Your browser does not support the video tag.
       </video>
     </td>
   </tr>
