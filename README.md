@@ -62,7 +62,7 @@ colcon build
 |-----|----|----|
 | /scan1  | `sensor_msgs/LaserScan` | The specified Laser-Scan input from your sensor 1 | 
 | /scan2  | `sensor_msgs/LaserScan` | The specified Laser-Scan input from your sensor 2 | 
-| /scan_i...  | `sensor_msgs/LaserScan` | An unrestricted amount of inputs can be specified | 
+| /scani ...  | `sensor_msgs/LaserScan` | An unrestricted amount of inputs can be specified | 
 | /odom  | `nav_msgs/Odometry` | The odometry of your robot is used to ensure a consistent fusion | 
 | **tf** | N/A | A valid transform from your configured frames and those attached to the Laser-Scan messages inputs |
 
@@ -74,21 +74,78 @@ colcon build
 
 ## Configuration
 
-### Merger Params
+### Common Params
 
-`mode` - "mapping" or "localization" mode for performance optimizations in the Ceres problem creation
+`rate` - The frequency at which the node operates, in Hz. (Might be smaller, depending on the specified parameter `extrapolate_scan`)
 
-`mode` - "mapping" or "localization" mode for performance optimizations in the Ceres problem creation
+`topic_out` - The topic name for the output scan.
 
-### Inputs Params
+`new_frame` - The frame in which the new scan will be published.
 
-Those configurations can be specified for each inputs.
+`odom_topic` - The topic name for odometry data, used by the persistence feature and to synchronize scans.
 
-`odom_frame` - Odometry frame
+`odom_delay_limit` - The time in seconds for which odometry data is kept in memory. A value of 0.0 means only the last received odometry is kept.
 
-`map_frame` - Map frame
+`extrapolate_odometry` - A boolean flag that defines if the program should extrapolate the odometry when the wanted stamp of a LaserScan is after the newest received odometry.
 
-`base_frame` - Base frame
+### Debugging
+
+`debug` - A boolean flag to enable or disable debugging.
+
+`debug_file_path` - The file path where debug information will be saved.
+
+`show_ranges` - A boolean flag to enable or disable the display of ranges of the output scan.
+
+`show_odometry_detail` - A boolean flag to enable or disable the display of detailed odometry information.
+
+### Output Settings
+
+`angle_min` - The minimum angle of the scan in radians (specified in the `new_frame` frame).
+
+`angle_max` - The maximum angle of the scan in radians (specified in the `new_frame` frame).
+
+`angle_increment` - The angular increment between each measurement in radians.
+
+`range_min` - The minimum range of the scan in meters (specified in the `new_frame` frame).
+
+`range_max` - The maximum range of the scan in meters (specified in the `new_frame` frame).
+
+`extrapolate_scan` - A boolean flag that, if true, allows the node to respect the `rate` by updating the scan according to the new received odometry even if the sensors didn't update new data. If false, the merged scan will only be updated and published when new data from one of the sensors are received.
+
+### Advanced Output Settings
+
+`auto_set` - A boolean flag that, if true, will automatically set the following settings using the first source.
+
+`time_increment` - The time increment in seconds.
+
+`scan_time` - The scan time in seconds.
+
+### Sources
+
+These configurations can be specified for each input source.
+
+`sources` - A list of source identifiers (e.g., `s1`, `s2`, `s3`, `s4`).
+
+#### Source-Specific Params (e.g., `s1`, `s2`, `s3`, `s4`)
+
+`topic` - The topic name for the input 2D Laser-Scan.
+
+`timeout` - The timeout in seconds for the input scan. A value of 0.0 means all values are authorized.
+
+`start_angle` - The starting angle of the scan in radians (specified in the source frame).
+
+`end_angle` - The ending angle of the scan in radians (specified in the source frame).
+
+`scan_angle_offset` - The angle offset of the scan in radians.
+
+`range_min` - The minimum range of the scan in meters (specified in the source frame).
+
+`range_max` - The maximum range of the scan in meters (specified in the source frame).
+
+`persistence` - A boolean flag for the persistence feature (currently under development).
+
+`timeout_persistence` - The timeout for points to keep in the persistent scan in seconds. A value of 0.0 means all values are kept (currently under development).
+
 
 ## Launch
 Two parameters can be specified when launching the package.
