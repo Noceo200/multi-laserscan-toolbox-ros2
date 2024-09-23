@@ -27,6 +27,12 @@ It does not aim to replace existing methods for 2D mapping and navigation but ra
   </tr>
 </table>
 
+https://github.com/Noceo200/multi-laserscan-toolbox-ros2.git
+
+Related packages:
+
+* Convert Point Cloud to Laser-Scan: https://github.com/Noceo200/depth-filter-scan-converter.git
+
 ## Dependencies
 * ROS2 (Tested on Humble): https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
 
