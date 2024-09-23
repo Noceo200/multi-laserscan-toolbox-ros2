@@ -45,6 +45,8 @@ The following ROS2 packages are used and should be available once ROS2 is instal
 * tf2_geometry_msgs
 * rosgraph_msgs
 * nav_msgs
+* PCL
+* pcl_conversions
 
 If needed, install the missing ones:
 ```
