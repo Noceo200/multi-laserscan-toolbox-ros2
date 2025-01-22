@@ -6,7 +6,7 @@ laserscan_toolbox_node:
     new_frame: "base_link"
     odom_topic: "odom" #Used by persistence feature and to synchronise scans
     odom_delay_limit: 3.0 #s, time of odometries to keep in memory, 0.0 = keep only last received odometry
-    extrapolate_odometry: false #define if the program should extrapolate the odometry when the wanted stamp of a LaserScan is after the newest received odometry.
+    extrapolate_odometry: false #(under development) define if the program should extrapolate the odometry when the wanted stamp of a LaserScan is after the newest received odometry.
 
     #debugging
     debug: false
@@ -15,12 +15,12 @@ laserscan_toolbox_node:
     show_odometry_detail: true
 
     #output settings
-    angle_min: 0.0 #0.0
-    angle_max: 6.283185307 #6.283185307
-    angle_increment: 0.004363323 #0.069 #0.27925268 #0.004363323 #0.008726647 #0.017453293 for 360 values resolution = 1deg precision
+    angle_min: 0.0 
+    angle_max: 6.283185307
+    angle_increment: 0.004363323 #0.017453293 for 360 values resolution = 1deg precision
     range_min: 0.0 #m
     range_max: 12.0 #m
-    extrapolate_scan: false #If true, the scan merger will try to respect the "rate" by updating the scan according to the new received odometry even if the sensors didn't update new datas, otherwise, the merge will just update the merged scan when it receive new datas from one of the sensor.
+    extrapolate_scan: false #(under development) If true, the scan merger will try to respect the "rate" by updating the scan according to the new received odometry even if the sensors didn't update new datas, otherwise, the merge will just update the merged scan when it receive new datas from one of the sensor.
 
     #advanced output settings
     auto_set: true #If true, the settings below will be set automatically using the first source
@@ -35,12 +35,12 @@ laserscan_toolbox_node:
       timeout: 0.0 #0.0 seconds = all value's date are autorized
       start_angle: 1.570796327 #represent 45 deg in source frame
       end_angle: 3.141592654 #represent -45 = 315 deg in source frame
-      scan_angle_offset: 0.0 #180 deg with rpLidars, but angles are well specified
+      scan_angle_offset: 0.0
       range_min: 0.0 #m
       range_max: 100.0 #m
 
-      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
-      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
+      persistence: false #(under development)
+      timeout_persistence: 0.0 #(under development) timeout for points to keep in persistent scan = all values kept
 
     s2:
       topic: "lidar2/scan"
@@ -51,8 +51,8 @@ laserscan_toolbox_node:
       range_min: 0.0 #m
       range_max: 100.0 #m
 
-      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
-      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
+      persistence: false #(under development)
+      timeout_persistence: 0.0 #(under development) timeout for points to keep in persistent scan = all values kept
 
     s3:
       topic: "cam1/scan"
@@ -63,8 +63,8 @@ laserscan_toolbox_node:
       range_min: 0.0 #m
       range_max: 100.0 #m
 
-      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
-      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
+      persistence: false #(under development)
+      timeout_persistence: 0.0 #(under development) timeout for points to keep in persistent scan = all values kept
 
     s4:
       topic: "cam2/scan"
@@ -75,5 +75,5 @@ laserscan_toolbox_node:
       range_min: 0.0 #m
       range_max: 100.0 #m
 
-      persistence: false #(TDM,to  delete, not working, small odometry errors (due to computation) integrated in persistent scan)
-      timeout_persistence: 0.0 #0.0 timeout for points to keep in persistent scan = all values kept (TDM to delete)
+      persistence: false #(under development)
+      timeout_persistence: 0.0 #(under development) timeout for points to keep in persistent scan = all values kept
