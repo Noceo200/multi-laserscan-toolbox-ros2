@@ -601,7 +601,7 @@ public:
                     //the data is now at the time of the new received one
                     laser_raw_filtered_persist->header.stamp = new_raw_time;
                     //we update the masks according to the scan, only the time mask need to be updated
-                    //(Persostence under developement) update_time_mask(scan_360_mask[source_name],resolution_360,scan_360_times[source_name],TimeToDouble(transformed_scans[source_name]->header.stamp)); 
+                    //(Persistence under developement) update_time_mask(scan_360_mask[source_name],resolution_360,scan_360_times[source_name],TimeToDouble(transformed_scans[source_name]->header.stamp)); 
                     //we fuse the scan with the former values, the new scan will update the former values only on its FOV equivalence on a 360 deg scan.
                     //local fusion
                     fuseScans(laser_raw_filtered_persist->ranges.size(),laser_raw_filtered_persist, transformed_scan, true, source_name);
